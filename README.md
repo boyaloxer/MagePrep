@@ -25,6 +25,7 @@ go.
 
 ## Status
 
+- **v0.1.2** — options background swapped to `blizzmage` (mage art).
 - **v0.1.1** — mage-blue theme + Mage Armor minimap icon (distinct from LockPrep).
 - **v0.1.0** — rebranded LockPrep scaffold (UI, presets shell, minimap, options art).
 - Mage-specific prep routine: **WIP**.
