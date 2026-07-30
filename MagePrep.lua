@@ -626,12 +626,12 @@ end
 -- flat dark panel, 1px border, hairline sheen under the top edge
 local function MP_SkinPanel(f, br, bg, bb)
     f:SetBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
-    f:SetBackdropColor(0.062, 0.053, 0.096, 0.97)
+    f:SetBackdropColor(0.035, 0.055, 0.095, 0.97)
     f:SetBackdropBorderColor(br, bg, bb, 1)
     local sheen = MP_Tex(f, "BORDER")
     sheen:SetPoint("TOPLEFT", 1, -1); sheen:SetPoint("TOPRIGHT", -1, -1)
     sheen:SetHeight(1)
-    sheen:SetVertexColor(0.71, 0.55, 0.88, 0.10)
+    sheen:SetVertexColor(0.55, 0.75, 0.98, 0.10)
 end
 
 local function MP_Close(parent, onclick)
@@ -639,29 +639,29 @@ local function MP_Close(parent, onclick)
     b:SetSize(18, 18)
     b:SetPoint("TOPRIGHT", -6, -6)
     local x = MP_FS(b, 13)
-    x:SetPoint("CENTER", 0, 0); x:SetText("x"); x:SetTextColor(0.42, 0.38, 0.50)
-    b:SetScript("OnEnter", function() x:SetTextColor(0.78, 0.75, 0.87) end)
-    b:SetScript("OnLeave", function() x:SetTextColor(0.42, 0.38, 0.50) end)
+    x:SetPoint("CENTER", 0, 0); x:SetText("x"); x:SetTextColor(0.38, 0.48, 0.62)
+    b:SetScript("OnEnter", function() x:SetTextColor(0.78, 0.88, 0.98) end)
+    b:SetScript("OnLeave", function() x:SetTextColor(0.38, 0.48, 0.62) end)
     b:SetScript("OnClick", onclick)
     return b
 end
 
--- adds a 30px header strip (purple tint + divider) and returns it
+-- adds a 30px header strip (mage-blue tint + divider) and returns it
 local function MP_Header(f)
     local bar = CreateFrame("Frame", nil, f)
     bar:SetPoint("TOPLEFT", 1, -1); bar:SetPoint("TOPRIGHT", -1, -1)
     bar:SetHeight(29)
-    local bg = MP_Tex(bar); bg:SetAllPoints(); bg:SetVertexColor(0.48, 0.35, 0.71, 0.07)
+    local bg = MP_Tex(bar); bg:SetAllPoints(); bg:SetVertexColor(0.28, 0.48, 0.78, 0.07)
     local div = MP_Tex(bar, "BORDER")
     div:SetPoint("BOTTOMLEFT"); div:SetPoint("BOTTOMRIGHT"); div:SetHeight(1)
-    div:SetVertexColor(0.48, 0.44, 0.59, 0.18)
+    div:SetVertexColor(0.40, 0.52, 0.68, 0.18)
     return bar
 end
 
 local ui = CreateFrame("Frame", "MagePrepFrame", UIParent, "BackdropTemplate")
 ui:SetSize(308, 120)
 ui:SetPoint("CENTER", UIParent, "CENTER", 350, 0)
-MP_SkinPanel(ui, 0.24, 0.20, 0.33)
+MP_SkinPanel(ui, 0.18, 0.32, 0.52)
 ui:SetMovable(true)
 ui:EnableMouse(true)
 ui:RegisterForDrag("LeftButton")
@@ -679,15 +679,15 @@ local headerBar = MP_Header(ui)
 do
     local gem = MP_Tex(headerBar, "ARTWORK")
     gem:SetSize(7, 7); gem:SetPoint("LEFT", 12, 0)
-    gem:SetVertexColor(0.57, 0.35, 0.85, 1)
+    gem:SetVertexColor(0.32, 0.58, 0.95, 1)
     gem:SetRotation(math.pi / 4)
     local title = MP_FS(headerBar, 13)
     title:SetPoint("LEFT", 26, 0); title:SetText("MagePrep")
-    title:SetTextColor(0.83, 0.78, 0.92)
+    title:SetTextColor(0.78, 0.88, 0.98)
     local hint = MP_FS(headerBar, 9)
     hint:SetPoint("LEFT", title, "RIGHT", 7, -1)
     hint:SetText("right-click: options")
-    hint:SetTextColor(0.40, 0.36, 0.50)
+    hint:SetTextColor(0.38, 0.50, 0.66)
 end
 
 -- Fade the checklist out (mounting / gates open). Hard-hide when done so it
@@ -731,7 +731,7 @@ cdPill:SetSize(42, 18)
 cdPill:SetPoint("RIGHT", headerBar, "RIGHT", -26, 0)
 cdPill:SetBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
 cdPill:SetBackdropColor(0, 0, 0, 0.35)
-cdPill:SetBackdropBorderColor(0.35, 0.31, 0.45, 0.6)
+cdPill:SetBackdropBorderColor(0.28, 0.40, 0.55, 0.6)
 local cdText = MP_FS(cdPill, 12)
 cdText:SetPoint("CENTER", 0, 0)
 cdPill:Hide()
@@ -744,14 +744,14 @@ actionBlock:SetHeight(44)
 do
     local bg = MP_Tex(actionBlock)
     bg:SetAllPoints()
-    MP_Grad(bg, 0.57, 0.35, 0.85, 0.13, 0.57, 0.35, 0.85, 0.0)
+    MP_Grad(bg, 0.32, 0.58, 0.95, 0.13, 0.32, 0.58, 0.95, 0.0)
     local div = MP_Tex(actionBlock, "BORDER")
     div:SetPoint("BOTTOMLEFT"); div:SetPoint("BOTTOMRIGHT"); div:SetHeight(1)
-    div:SetVertexColor(0.48, 0.44, 0.59, 0.14)
+    div:SetVertexColor(0.40, 0.52, 0.68, 0.14)
     local lbl = MP_FS(actionBlock, 9)
     lbl:SetPoint("TOPLEFT", 12, -7)
     lbl:SetText("NEXT PRESS")
-    lbl:SetTextColor(0.54, 0.49, 0.66)
+    lbl:SetTextColor(0.48, 0.60, 0.76)
 end
 local keyChip = CreateFrame("Frame", nil, actionBlock, "BackdropTemplate")
 keyChip:SetSize(24, 16)
@@ -783,7 +783,7 @@ castBar:SetPoint("BOTTOMLEFT", 0, 2); castBar:SetPoint("BOTTOMRIGHT", 0, 2)
 castBar:SetHeight(7)
 castBar:SetBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
 castBar:SetBackdropColor(0, 0, 0, 0.5)
-castBar:SetBackdropBorderColor(0.35, 0.31, 0.45, 0.5)
+castBar:SetBackdropBorderColor(0.28, 0.40, 0.55, 0.5)
 castBar:SetStatusBarTexture(WHITE8)
 castBar:SetMinMaxValues(0, 1)
 castBlock:Hide()
@@ -795,7 +795,7 @@ tradeFS:SetPoint("RIGHT", ui, "RIGHT", -12, 0)
 tradeFS:SetJustifyH("LEFT")
 tradeFS:SetText("")
 
--- step rows: mark box + label + NOW/HELD tag, current row gets a purple wash
+-- step rows: mark box + label + NOW/HELD tag, current row gets a mage-blue wash
 local rows = {}
 local function GetRow(i)
     local r = rows[i]
@@ -862,27 +862,27 @@ function MagePrep_UpdateUI()
             row.box:SetBackdropColor(0.18, 0.38, 0.18, 0.5)
             row.box:SetBackdropBorderColor(0.29, 0.48, 0.29, 1)
             row.mark:SetText("v"); row.mark:SetTextColor(0.48, 0.82, 0.48)
-            row.label:SetTextColor(0.37, 0.35, 0.46)
+            row.label:SetTextColor(0.36, 0.46, 0.58)
         elseif s.id == currentId then
-            MP_Grad(row.bg, 0.57, 0.35, 0.85, 0.22, 0.57, 0.35, 0.85, 0.02)
-            row.box:SetBackdropColor(0.57, 0.35, 0.85, 0.35)
-            row.box:SetBackdropBorderColor(0.57, 0.35, 0.85, 1)
-            row.mark:SetText(">"); row.mark:SetTextColor(0.83, 0.71, 0.96)
-            row.label:SetTextColor(0.94, 0.92, 0.97)
-            row.tag:SetText("NOW"); row.tag:SetTextColor(0.71, 0.55, 0.88)
+            MP_Grad(row.bg, 0.32, 0.58, 0.95, 0.22, 0.32, 0.58, 0.95, 0.02)
+            row.box:SetBackdropColor(0.32, 0.58, 0.95, 0.35)
+            row.box:SetBackdropBorderColor(0.32, 0.58, 0.95, 1)
+            row.mark:SetText(">"); row.mark:SetTextColor(0.72, 0.86, 1.00)
+            row.label:SetTextColor(0.92, 0.96, 1.00)
+            row.tag:SetText("NOW"); row.tag:SetTextColor(0.55, 0.75, 0.98)
         elseif not ready then
             MP_Grad(row.bg, 0, 0, 0, 0, 0, 0, 0, 0)
             row.box:SetBackdropColor(0, 0, 0, 0.25)
-            row.box:SetBackdropBorderColor(0.23, 0.20, 0.31, 1)
+            row.box:SetBackdropBorderColor(0.18, 0.28, 0.40, 1)
             row.mark:SetText("")
-            row.label:SetTextColor(0.37, 0.35, 0.46)
-            row.tag:SetText("HELD"); row.tag:SetTextColor(0.29, 0.26, 0.37)
+            row.label:SetTextColor(0.36, 0.46, 0.58)
+            row.tag:SetText("HELD"); row.tag:SetTextColor(0.22, 0.32, 0.45)
         else
             MP_Grad(row.bg, 0, 0, 0, 0, 0, 0, 0, 0)
             row.box:SetBackdropColor(0, 0, 0, 0.3)
-            row.box:SetBackdropBorderColor(0.29, 0.26, 0.37, 1)
+            row.box:SetBackdropBorderColor(0.22, 0.32, 0.45, 1)
             row.mark:SetText("")
-            row.label:SetTextColor(0.66, 0.61, 0.75)
+            row.label:SetTextColor(0.62, 0.72, 0.86)
         end
         local h = math.max(19, (row.label:GetStringHeight() or 12) + 8)
         row:SetHeight(h)
@@ -906,7 +906,7 @@ function MagePrep_UpdateUI()
         actionFS:SetPoint("TOPLEFT", actionBlock, "TOPLEFT", 12, -20)
         actionFS:SetPoint("RIGHT", ui, "RIGHT", -10, 0)
     end
-    actionFS:SetTextColor(0.94, 0.92, 0.97)
+    actionFS:SetTextColor(0.92, 0.96, 1.00)
     if not key then
         actionFS:SetText("|cffff6666No key bound|r - type |cffffffff/mp bind <KEY>|r")
     elseif felAction then
@@ -1242,9 +1242,9 @@ end
 local opt = CreateFrame("Frame", "MagePrepOptions", UIParent, "BackdropTemplate")
 opt:SetSize(340, 400)   -- height is set after layout below
 opt:SetPoint("CENTER")
-MP_SkinPanel(opt, 0.29, 0.24, 0.41)
--- Solid black/purple fill (opaque) so UI behind the panel never bleeds through.
-opt:SetBackdropColor(0.04, 0.03, 0.07, 1)
+MP_SkinPanel(opt, 0.22, 0.38, 0.62)
+-- Solid black/blue fill (opaque) so UI behind the panel never bleeds through.
+opt:SetBackdropColor(0.03, 0.05, 0.10, 1)
 do
     -- Child frame ABOVE the backdrop fill, BELOW options controls.
     -- (Textures on the parent BACKGROUND layer sit under SetBackdrop and vanish
@@ -1262,11 +1262,11 @@ do
     art:SetTexture("Interface\\AddOns\\MagePrep\\Textures\\wreynolds")
     art:SetVertexColor(1, 1, 1, 0.50)
 
-    -- Light purple tint over the art so controls stay readable.
+    -- Light blue tint over the art so controls stay readable.
     local wash = bg:CreateTexture(nil, "ARTWORK", nil, 1)
     wash:SetAllPoints(bg)
     wash:SetTexture(WHITE8)
-    wash:SetVertexColor(0.08, 0.05, 0.14, 0.35)
+    wash:SetVertexColor(0.05, 0.10, 0.20, 0.35)
 
     opt.bgLayer = bg
     opt.bgArt = art
@@ -1313,8 +1313,8 @@ do
     local bar = MP_Header(opt)
     local otitle = MP_FS(bar, 13)
     otitle:SetPoint("LEFT", 12, 0)
-    otitle:SetText("MagePrep |cff7a6f96- Options|r")
-    otitle:SetTextColor(0.83, 0.78, 0.92)
+    otitle:SetText("MagePrep |cff6a8eb8- Options|r")
+    otitle:SetTextColor(0.78, 0.88, 0.98)
 end
 MP_Close(opt, function() opt:Hide() end)
 
@@ -1324,12 +1324,12 @@ local function SectionHeader(text)
     local fs = MP_FS(opt, 9)
     fs:SetPoint("TOPLEFT", 14, oy)
     fs:SetText(text)
-    fs:SetTextColor(0.54, 0.49, 0.66)
+    fs:SetTextColor(0.48, 0.60, 0.76)
     local div = MP_Tex(opt, "BORDER")
     div:SetPoint("TOPLEFT", 14, oy - 12)
     div:SetPoint("RIGHT", opt, "RIGHT", -14, 0)
     div:SetHeight(1)
-    div:SetVertexColor(0.48, 0.44, 0.59, 0.14)
+    div:SetVertexColor(0.40, 0.52, 0.68, 0.14)
     oy = oy - 19
 end
 
@@ -1340,7 +1340,7 @@ local function MakeCheck(label, note, get, set)
     row:SetPoint("RIGHT", opt, "RIGHT", -12, 0)
     row:SetHeight(19)
     local hl = MP_Tex(row)
-    hl:SetAllPoints(); hl:SetVertexColor(0.57, 0.35, 0.85, 0.08); hl:Hide()
+    hl:SetAllPoints(); hl:SetVertexColor(0.32, 0.58, 0.95, 0.08); hl:Hide()
     local box = CreateFrame("Frame", nil, row, "BackdropTemplate")
     box:SetSize(13, 13); box:SetPoint("LEFT", 3, 0)
     box:SetBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
@@ -1351,19 +1351,19 @@ local function MakeCheck(label, note, get, set)
     if note and note ~= "" then
         local nfs = MP_FS(row, 10)
         nfs:SetPoint("RIGHT", -4, 0); nfs:SetText(note)
-        nfs:SetTextColor(0.36, 0.33, 0.45)
+        nfs:SetTextColor(0.36, 0.46, 0.58)
     end
     function row:Refresh()
         if get() then
-            box:SetBackdropColor(0.58, 0.37, 0.86, 1)
-            box:SetBackdropBorderColor(0.66, 0.44, 0.92, 1)
+            box:SetBackdropColor(0.34, 0.60, 0.96, 1)
+            box:SetBackdropBorderColor(0.45, 0.70, 0.98, 1)
             mark:SetTextColor(0.05, 0.04, 0.08); mark:Show()
-            lbl:SetTextColor(0.91, 0.87, 0.96)
+            lbl:SetTextColor(0.88, 0.93, 1.00)
         else
             box:SetBackdropColor(0, 0, 0, 0.35)
-            box:SetBackdropBorderColor(0.29, 0.26, 0.37, 1)
+            box:SetBackdropBorderColor(0.22, 0.32, 0.45, 1)
             mark:Hide()
-            lbl:SetTextColor(0.48, 0.44, 0.56)
+            lbl:SetTextColor(0.42, 0.54, 0.68)
         end
     end
     row:SetScript("OnEnter", function() hl:Show() end)
@@ -1380,7 +1380,7 @@ do
     local lbl = MP_FS(opt, 9)
     lbl:SetPoint("TOPLEFT", 14, oy)
     lbl:SetText("PRESET")
-    lbl:SetTextColor(0.54, 0.49, 0.66)
+    lbl:SetTextColor(0.48, 0.60, 0.76)
 end
 oy = oy - 14
 local segTrack = CreateFrame("Frame", nil, opt, "BackdropTemplate")
@@ -1389,20 +1389,20 @@ segTrack:SetPoint("RIGHT", opt, "RIGHT", -14, 0)
 segTrack:SetHeight(22)
 segTrack:SetBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
 segTrack:SetBackdropColor(0, 0, 0, 0.4)
-segTrack:SetBackdropBorderColor(0.29, 0.26, 0.37, 1)
+segTrack:SetBackdropBorderColor(0.22, 0.32, 0.45, 1)
 local segButtons = {}
 for i, key in ipairs(PRESET_ORDER) do
     local b = CreateFrame("Button", nil, segTrack)
     b:SetSize(76, 18)
     b:SetPoint("LEFT", 2 + (i - 1) * 77, 0)
     b.bg = MP_Tex(b)
-    b.bg:SetAllPoints(); b.bg:SetVertexColor(0.42, 0.27, 0.66, 1); b.bg:Hide()
+    b.bg:SetAllPoints(); b.bg:SetVertexColor(0.22, 0.45, 0.82, 1); b.bg:Hide()
     b.txt = MP_FS(b, 11)
     b.txt:SetPoint("CENTER", 0, 0); b.txt:SetText(PRESETS[key].label)
     b:SetScript("OnClick", function() ApplyPreset(key) end)
     b:SetScript("OnEnter", function()
         if ((MagePrepDB and MagePrepDB.preset) or "custom") ~= key then
-            b.txt:SetTextColor(0.83, 0.78, 0.92)
+            b.txt:SetTextColor(0.78, 0.88, 0.98)
         end
     end)
     b:SetScript("OnLeave", function() UpdatePresetSeg() end)
@@ -1412,9 +1412,9 @@ UpdatePresetSeg = function()
     local cur = (MagePrepDB and MagePrepDB.preset) or "custom"
     for key, b in pairs(segButtons) do
         if key == cur then
-            b.bg:Show(); b.txt:SetTextColor(0.94, 0.92, 0.97)
+            b.bg:Show(); b.txt:SetTextColor(0.92, 0.96, 1.00)
         else
-            b.bg:Hide(); b.txt:SetTextColor(0.48, 0.44, 0.56)
+            b.bg:Hide(); b.txt:SetTextColor(0.42, 0.54, 0.68)
         end
     end
 end
@@ -1538,7 +1538,7 @@ do
     local lbl = MP_FS(opt, 9)
     lbl:SetPoint("TOPLEFT", 14, oy)
     lbl:SetText("GATE MOUNT")
-    lbl:SetTextColor(0.54, 0.49, 0.66)
+    lbl:SetTextColor(0.48, 0.60, 0.76)
 end
 local mdd = CreateFrame("Frame", "MagePrepMountDropDown", opt, "UIDropDownMenuTemplate")
 mdd:SetPoint("TOPLEFT", -2, oy - 12)
@@ -1645,11 +1645,11 @@ do
     local lbl = MP_FS(opt, 9)
     lbl:SetPoint("TOPLEFT", 14, oy)
     lbl:SetText("KEYBIND")
-    lbl:SetTextColor(0.54, 0.49, 0.66)
+    lbl:SetTextColor(0.48, 0.60, 0.76)
     local h = MP_FS(opt, 10)
     h:SetPoint("LEFT", lbl, "RIGHT", 8, 0)
     h:SetText("click the button, then press the key you want")
-    h:SetTextColor(0.36, 0.33, 0.45)
+    h:SetTextColor(0.36, 0.46, 0.58)
 end
 
 local keyRows = {}
@@ -1731,7 +1731,7 @@ local function MakeKeyRow(labelText, buttonName, yoff)
     btn:SetSize(200, 24)
     btn:SetPoint("TOPLEFT", 16, yoff)
     local nt = btn:GetNormalTexture()
-    if nt then nt:SetVertexColor(0.62, 0.45, 0.85) end   -- purple tint, keeps the button border/texture
+    if nt then nt:SetVertexColor(0.40, 0.65, 0.95) end   -- mage-blue tint, keeps the button border/texture
     local row = {
         label  = labelText,
         button = buttonName,
@@ -1775,7 +1775,7 @@ if LDB then
     ldbObj = LDB:NewDataObject("MagePrep", {
         type = "launcher",
         text = "MagePrep",
-        icon = "Interface\\Icons\\INV_Stone_04", -- healthstone
+        icon = "Interface\\Icons\\Spell_Holy_MagicalSentry", -- Mage Armor
         OnClick = function(_, mb)
             if mb == "RightButton" then
                 ToggleWindow()
