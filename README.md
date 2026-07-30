@@ -3,10 +3,10 @@
 A **mage arena prep helper** for WoW TBC Anniversary (2.5.x).
 
 Forked from [LockPrep](https://github.com/boyaloxer/LockPrep) — same architecture
-(state-aware next-step button + bracket checklist + options UI). The current
-build still contains the LockPrep warlock step list as a starting point; mage
-prep steps, mounts, and food/water/water-elemental flow will replace that as we
-go.
+(state-aware next-step button + bracket checklist + options UI). The warlock
+domain has been remapped to mage prep: Arcane Intellect, armor, Amplify/Dampen
+Magic, Mana Emerald, conjured food/water (trade or Ritual of Refreshment table),
+drink-to-full, Ice Barrier, and the gate mount.
 
 ## Quick start
 
@@ -20,15 +20,17 @@ go.
 | --- | --- |
 | `/mageprep` / `/mp` / `/mprep` | Help / status |
 | `/mp bind <KEY>` | Bind the next-step button |
+| `/mp armor ice\|molten\|mage` | Pick which armor the armor step casts |
+| `/mp preset 2s\|3s5s\|bg\|custom` | Apply a preset |
 | `/mp test` | Toggle checklist |
 | `/mp options` | Open options |
 
 ## Status
 
+- **v0.2.0** — mage prep routine live: Arcane Intellect, armor (Ice/Molten/Mage), Amplify/Dampen Magic, Mana Emerald, Conjure Food/Water (trade) or Ritual of Refreshment, drink-to-full, Ice Barrier, mount. Presets retuned (2s / 3s5s / BGs). LockPrep safety engine kept; warlock-only systems (pets/sac/spellstone) removed.
 - **v0.1.2** — options background swapped to `blizzmage` (mage art).
 - **v0.1.1** — mage-blue theme + Mage Armor minimap icon (distinct from LockPrep).
 - **v0.1.0** — rebranded LockPrep scaffold (UI, presets shell, minimap, options art).
-- Mage-specific prep routine: **WIP**.
 
 ## Art credit
 

@@ -16,7 +16,7 @@
 -- Two pieces working together:
 --   1. A state-aware secure button (MagePrepButton). Bind one key to it;
 --      each press does the FIRST setup step that isn't done yet, checking
---      your actual game state (bags, buffs, pet, weapon imbue). A failed
+--      your actual game state (bags, buffs, conjured food/water). A failed
 --      step just stays "not done", so the next press retries it -- no
 --      castsequence desync.
 --   2. A bracket-aware checklist overlay with a gate countdown display
@@ -26,39 +26,61 @@
 --
 -- Everything castable is expressed as macro text so targeting (@player,
 -- @party1, ...) and specific spell ranks are exact. Tweak CFG if any name
--- differs on your client/locale.
+-- differs on your client/locale. (Safety engine forked from LockPrep.)
 -- =====================================================================
 
 local CFG = {
     -- macro text per action (edit names/ranks/locale here if needed)
     cast = {
-        hsMajor      = "/cast Create Healthstone(Rank 5)",   -- 11730 -> Major Healthstone
-        hsMaster     = "/cast Create Healthstone(Rank 6)",   -- 27230 -> Master Healthstone
-        ritual       = "/cast Ritual of Souls",              -- 3s/5s: soulwell for the team
-        spellstone      = "/cast Create Spellstone",          -- highest known = Master (Rank 4)
-        equipSpellstone = "/equip Master Spellstone",         -- relic goes in the wand/ranged slot
-        dispelSpellstone= "/use Master Spellstone",           -- IN-COMBAT: dispel all harmful magic (3 min CD)
-        summonImp    = "/cast Summon Imp",
-        summonVoid   = "/cast Summon Voidwalker",
-        summonFel    = "/cast Summon Felhunter",
-        felArmor     = "/cast Fel Armor",                    -- self-only armor buff
-        fireShield   = "/cast [@%s] Fire Shield",            -- %s = unit
-        unending     = "/cast [@%s] Unending Breath",
-        detectInvis  = "/cast [@%s] Detect Invisibility",
-        sacrifice    = "/cast Sacrifice",
-        soulLink     = "/cast Soul Link",
-        taintedBlood = "/cast Tainted Blood",
-        shadowWard   = "/cast Shadow Ward",
-        mount        = "/use Red Skeletal Warhorse",         -- ground mount for the gate sprint
+        intellect    = "/cast [@%s] Arcane Intellect",      -- %s = unit (Brilliance also counts as done)
+        armorIce     = "/cast Ice Armor",                   -- Frost/Ice Armor line
+        armorMolten  = "/cast Molten Armor",
+        armorMage    = "/cast Mage Armor",
+        amplify      = "/cast [@%s] Amplify Magic(Rank 1)", -- healer comps: more healing taken
+        dampen       = "/cast [@%s] Dampen Magic",          -- double-DPS comps: less spell damage taken
+        emerald      = "/cast Conjure Mana Emerald",        -- 27101
+        food         = "/cast Conjure Food",                -- highest known rank
+        water        = "/cast Conjure Water",               -- highest known rank
+        ritual       = "/cast Ritual of Refreshment",       -- 43987: refreshment table for the team
+        barrier      = "/cast Ice Barrier",
+        mount        = "/use Red Skeletal Warhorse",        -- ground mount for the gate sprint
+        drink        = "/use Conjured Mountain Spring Water",-- fallback; DrinkMacro() prefers what you carry
     },
 
-    -- item / buff / pet names used for state detection (enUS)
-    item = { hsMajor = "Major Healthstone", hsMaster = "Master Healthstone", spellstone = "Master Spellstone" },
-    buff = {
-        felArmor = "Fel Armor",
-        fireShield = "Fire Shield", unending = "Unending Breath", detectInvis = "Detect Invisibility",
-        sacrifice = "Sacrifice", soulLink = "Soul Link", shadowWard = "Shadow Ward", taintedBlood = "Tainted Blood",
+    -- item / buff names used for state detection (enUS)
+    item = {
+        emerald = "Mana Emerald",
+        food    = "Conjured Cinnamon Roll",  -- representative; see FOOD_ITEMS list below
+        water   = "Conjured Mountain Spring Water",
     },
+    buff = {
+        intellect   = "Arcane Intellect",   -- Arcane Brilliance also counts (see HasIntellect)
+        armorIce    = "Ice Armor",
+        armorMolten = "Molten Armor",
+        armorMage   = "Mage Armor",
+        amplify     = "Amplify Magic",
+        dampen      = "Dampen Magic",
+        barrier     = "Ice Barrier",
+    },
+}
+
+-- Common TBC/WotLK conjured food & water item names. Ranks vary by level and
+-- locale, so we detect by summing GetItemCount over a reasonable name list
+-- rather than pinning a single rank. (Kept overlap-free so RefreshCount doesn't
+-- double-count.)
+local FOOD_ITEMS = {
+    "Conjured Cinnamon Roll", "Conjured Croissant", "Conjured Sweet Roll",
+    "Conjured Sourdough", "Conjured Bread", "Conjured Muffin",
+    "Conjured Pumpernickel", "Conjured Rye", "Conjured Mana Pie",
+    "Conjured Mana Strudel",
+    -- Ritual of Refreshment table click (food+water in one item)
+    "Conjured Mana Biscuit",
+}
+local WATER_ITEMS = {
+    "Conjured Mountain Spring Water", "Conjured Crystal Water",
+    "Conjured Spring Water", "Conjured Mineral Water", "Conjured Fresh Water",
+    "Conjured Purified Water", "Conjured Sparkling Water",
+    "Conjured Glacier Water", "Conjured Water",
 }
 
 -- =====================================================================
@@ -74,49 +96,73 @@ local function HasBuff(unit, name)
     return false
 end
 
-local PET_RANK = { Imp = 1, Voidwalker = 2, Felhunter = 3 }
-local function PetFamily() return UnitExists("pet") and UnitCreatureFamily("pet") or nil end
-local function PetRank() return PET_RANK[PetFamily() or ""] or 0 end
-local function HasPet() return UnitExists("pet") end
-
 local function Have(itemName) return (GetItemCount(itemName) or 0) > 0 end
 
--- Creation-delay guard (summons + healthstones only) ------------------
--- A summon/conjure can double-fire in two ways when you mash the key:
+-- Conjured-item counts (sum every known rank/name so a single-rank pin can't
+-- miss). RefreshCount = the food+water total, used for the trade bag-delta check
+-- and the drink step's readiness.
+local function FoodCount()
+    local n = 0
+    for _, nm in ipairs(FOOD_ITEMS) do n = n + (GetItemCount(nm) or 0) end
+    return n
+end
+local function WaterCount()
+    local n = 0
+    for _, nm in ipairs(WATER_ITEMS) do n = n + (GetItemCount(nm) or 0) end
+    return n
+end
+local function RefreshCount() return FoodCount() + WaterCount() end
+local function EmeraldCount() return GetItemCount(CFG.item.emerald) or 0 end
+
+-- Intellect is done if the player carries EITHER the single-target buff
+-- (Arcane Intellect) or the group version (Arcane Brilliance) -- a partner
+-- brilliance means we don't need to re-buff them.
+local function HasIntellect(unit)
+    return HasBuff(unit, CFG.buff.intellect) or HasBuff(unit, "Arcane Brilliance")
+end
+
+-- Any of the mutually-exclusive armor buffs counts as "armored" (Frost Armor is
+-- the low-level name for the Ice Armor line, so accept it too).
+local function HasAnyArmor()
+    return HasBuff("player", CFG.buff.armorIce)
+        or HasBuff("player", "Frost Armor")
+        or HasBuff("player", CFG.buff.armorMolten)
+        or HasBuff("player", CFG.buff.armorMage)
+end
+
+-- Which armor the armor step casts, from MagePrepDB.armorPreference:
+-- "ice" | "molten" | "mage" (default "ice").
+local function ArmorPref()
+    local p = MagePrepDB and MagePrepDB.armorPreference
+    if p == "molten" or p == "mage" then return p end
+    return "ice"
+end
+local function PreferredArmorMacro()
+    local p = ArmorPref()
+    if p == "molten" then return CFG.cast.armorMolten end
+    if p == "mage"   then return CFG.cast.armorMage end
+    return CFG.cast.armorIce
+end
+
+-- Creation-delay guard (conjures only) --------------------------------
+-- A conjure can double-fire in two ways when you mash the key:
 --   1. Spell-queue window: a spell with a cast time queues a SECOND identical
 --      cast if you press again during its last ~0.4s. Nothing you check in
 --      done() can undo an already-queued cast.
---   2. Spawn gap: for a beat AFTER the cast lands the pet isn't UnitExists yet
---      / the stone hasn't dropped into the bag yet, so done() reads false and
---      the next press recasts.
+--   2. Spawn gap: for a beat AFTER the cast lands the item hasn't dropped into
+--      the bag yet, so done() reads false and the next press recasts.
 -- We close BOTH, scoped to just these steps:
 --   * (1) while you're mid-cast on the step's own spell, Refresh blanks the
 --         button so a mashed press can't queue a duplicate;
---   * (2) on cast SUCCESS we mark the step done until the real thing is
---         observed. Pets use a monotonic "highest rank summoned this match" so
---         summoning a higher pet (which dismisses the lower one) never re-opens
---         an earlier summon step. Healthstones use a per-tier pending flag that
---         clears the instant the stone lands; trade it away and the step
---         re-offers on its own (stone's gone, pending already cleared).
+--   * (2) on cast SUCCESS we set a per-item pending flag that clears the instant
+--         the conjured item lands; trade/eat it away and the step re-offers on
+--         its own (item's gone, pending already cleared).
 -- No timers involved: latches clear on the confirming event, not a stopwatch.
-local CREATE_HS_NAME = GetSpellInfo(6201) or "Create Healthstone" -- shared by all HS ranks
-local SUMMON_NAME = {
-    [1] = GetSpellInfo(688) or "Summon Imp",
-    [2] = GetSpellInfo(697) or "Summon Voidwalker",
-    [3] = GetSpellInfo(691) or "Summon Felhunter",
-}
-local petSummonedMax = 0   -- highest pet rank summoned this match (monotonic)
-local hsPending = {}       -- "hs_major"/"hs_master" -> true until the stone lands
-
--- A summon step is done if we've summoned that rank (or higher) THIS match
--- (petSummonedMax, monotonic, set on cast success) OR the live pet is EXACTLY
--- that rank. We deliberately use PetRank() == rank (not >=): a HIGHER-rank pet
--- carried in from before the match (e.g. zoning in with a Felhunter) must NOT
--- mark the lower Imp/Voidwalker summons done, or Fire Shield (needs Imp) and
--- Sacrifice (needs Voidwalker) get stranded. Summoning the Imp first replaces
--- the carried-in pet, so the chain self-corrects into normal order.
-local function PetStepDone(rank) return petSummonedMax >= rank or PetRank() == rank end
-local function HSStepDone(id, item) return Have(item) or hsPending[id] == true end
+local CREATE_EMERALD = GetSpellInfo(27101) or "Conjure Mana Emerald"
+local CREATE_FOOD    = GetSpellInfo(33717) or "Conjure Food"   -- highest-rank food conjure
+local CREATE_WATER   = GetSpellInfo(27090) or "Conjure Water"  -- highest-rank water conjure
+local itemPending = {}   -- "emerald"|"food"|"water" -> true until the item lands
+local function ItemStepDone(id, countFn) return countFn() > 0 or itemPending[id] == true end
 
 -- mount for the gate sprint (configurable so the addon is shareable)
 local DEFAULT_MOUNT = "Red Skeletal Warhorse"
@@ -134,30 +180,34 @@ local function MountName()
     return DEFAULT_MOUNT
 end
 
--- Warlock class mounts are SPELLS you cast, not bag items you use, so they need
--- /cast instead of /use. Keyed by localized spell name.
-local WARLOCK_MOUNT_IDS = { 5784, 23161 }   -- Summon Felsteed, Summon Dreadsteed
-local WARLOCK_MOUNT_NAME = {
-    [GetSpellInfo(5784) or "Summon Felsteed"]   = true,
-    [GetSpellInfo(23161) or "Summon Dreadsteed"] = true,
-}
--- The action line for the mount step: cast the warlock steed, or use an item mount.
+-- The action line for the mount step: mages ride bag-item mounts, so always /use.
 local function MountMacro()
-    local m = MountName()
-    if WARLOCK_MOUNT_NAME[m] then return "/cast " .. m end
-    return "/use " .. m
+    return "/use " .. MountName()
 end
 
--- Whether we're in "ritual" mode: driven purely by the checkboxes (set via a
--- preset or by hand) - Ritual of Souls enabled and the manual pair disabled.
-local function UseRitual()
+-- The drink step uses whatever conjured water you're actually carrying (falls
+-- back to a Mana Biscuit from the refreshment table, then CFG.cast.drink).
+local function DrinkMacro()
+    for _, nm in ipairs(WATER_ITEMS) do
+        if (GetItemCount(nm) or 0) > 0 then return "/use " .. nm end
+    end
+    if (GetItemCount("Conjured Mana Biscuit") or 0) > 0 then
+        return "/use Conjured Mana Biscuit"
+    end
+    return CFG.cast.drink
+end
+
+-- Whether we're in "table" mode: driven purely by the checkboxes (set via a
+-- preset or by hand) - Ritual of Refreshment enabled and the manual food/water
+-- conjures disabled. Same coupling idea LockPrep used for its item pair.
+local function UseTable()
     local d = MagePrepDB and MagePrepDB.disabled
     local ritualOn = not (d and d.ritual)
-    local majorOn  = not (d and d.hsmajor)
-    local masterOn = not (d and d.hsmaster)
-    return ritualOn and not (majorOn or masterOn)
+    local foodOn   = not (d and d.food)
+    local waterOn  = not (d and d.water)
+    return ritualOn and not (foodOn or waterOn)
 end
-local ritualDone = false  -- set when the Soulwell is actually created; reset each match
+local ritualDone = false  -- set when the refreshment table is actually created; reset each match
 local ritualChannelStart = nil  -- GetTime() the current Ritual channel began
 local debugOn = false     -- /mp debug: verbose ritual/cast tracing
 -- Debug lines are ALSO appended to MagePrepDB.log so they persist to the
@@ -166,7 +216,7 @@ local debugOn = false     -- /mp debug: verbose ritual/cast tracing
 local function DPrint(...)
     if not debugOn then return end
     local msg = table.concat({ tostringall(...) }, "  ")
-    print("|cff66ccffLP|r " .. msg)
+    print("|cff66ccffMP|r " .. msg)
     MagePrepDB = MagePrepDB or {}
     local t = MagePrepDB.log or {}
     t[#t + 1] = date("%H:%M:%S") .. "  " .. msg
@@ -177,7 +227,7 @@ local function DPrint(...)
     end
     MagePrepDB.log = t
 end
-local RITUAL_NAME = GetSpellInfo(29893) or "Ritual of Souls"  -- 29893 = Ritual of Souls
+local RITUAL_NAME = GetSpellInfo(43987) or "Ritual of Refreshment"  -- 43987 = Ritual of Refreshment
 
 -- generic "am I casting/channeling this spell right now" (by localized name)
 local function IsCasting(spellName)
@@ -200,9 +250,9 @@ local function TimeLeft()
     return (t < 0) and 0 or t
 end
 
--- Soft time-gate for the time-sensitive finish (Felhunter + sac + Soul Link +
--- Shadow Ward + Tainted Blood + mount). Holds them until <= EndPrepSecs() left
--- so mashing early doesn't blow the fresh-shield/short-duration stuff. Tunable
+-- Soft time-gate for the time-sensitive finish (Ice Barrier + mount). Holds
+-- them until <= EndPrepSecs() left so mashing early doesn't waste a fresh
+-- barrier / mount you before the gates. Tunable
 -- via the options slider, stored PER PRESET (2s / 3s5s / bg / custom each keep
 -- their own value). Default 12; 0 disables the gate entirely. If no countdown
 -- has been detected yet (gateAt nil) we allow it - never lock the user out over
@@ -251,8 +301,7 @@ local function InArena()
 end
 
 -- Any zone where the prep routine runs: arenas and battlegrounds (the BGs preset
--- relies on this so Ritual of Souls' SPELL_CREATE is detected and the per-match
--- state resets outside arenas too).
+-- relies on this so the per-match state resets outside arenas too).
 local function InPrepZone()
     local _, itype = IsInInstance()
     return itype == "arena" or itype == "pvp"
@@ -266,26 +315,26 @@ local function Partners()
     return out
 end
 
-local function IsWarlock(unit)
+local function IsMage(unit)
     -- class comes from the group roster, so it's known even out of range /
     -- before the partner has zoned in
     local _, class = UnitClass(unit)
-    return class == "WARLOCK"
+    return class == "MAGE"
 end
 
--- Partners who actually need a healthstone FROM US. Warlocks conjure their own
--- (and never accept a traded one), so pestering them with the trade window just
--- jams the series. This is trade-only: buffs and Ritual of Souls still cover
--- warlock partners like everyone else.
-local function StonePartners()
+-- Partners who actually need conjured food/water FROM US. Other mages conjure
+-- their own, so pestering them with the trade window just jams the series. This
+-- is trade-only: buffs and the refreshment table still cover mage partners like
+-- everyone else.
+local function FoodPartners()
     local out = {}
     for _, u in ipairs(Partners()) do
-        if not IsWarlock(u) then out[#out + 1] = u end
+        if not IsMage(u) then out[#out + 1] = u end
     end
     return out
 end
 
--- per-match healthstone trade tracking (declared early; used by the UI)
+-- per-match food/water trade tracking (declared early; used by the UI)
 -- We track by GUID (unique, realm-proof) so cross-realm skirmish partners are
 -- matched correctly; tradedNames stays for the traded-count display.
 local tradedNames = {}
@@ -293,7 +342,7 @@ local tradedGUIDs = {}
 local tradeGUID                    -- GUID of the unit in the current trade window
 local iAccepted = false            -- is OUR side of the trade accepted? (from TRADE_ACCEPT_UPDATE)
 local partnerAccepted = false      -- the OTHER side's accept flag (TRADE_ACCEPT_UPDATE arg2)
-local tradeCommitStones = 0        -- healthstones in OUR side seen while BOTH sides were accepted
+local tradeCommitRefresh = 0       -- food/water in OUR side seen while BOTH sides were accepted
 local function TradedCount()
     local n = 0
     for _ in pairs(tradedNames) do n = n + 1 end
@@ -305,31 +354,22 @@ local function HasTraded(unit)
     local name = UnitName(unit)
     return name ~= nil and tradedNames[name] == true
 end
--- total healthstones currently in bags (used to detect a completed trade)
-local function HSCount()
-    return (GetItemCount(CFG.item.hsMajor) or 0) + (GetItemCount(CFG.item.hsMaster) or 0)
-end
 
 -- =====================================================================
 -- Step groups (each can be toggled off in the options panel)
 -- =====================================================================
 local GROUPS = {
-    { key = "hsmajor",      label = "Major Healthstone (2s)" },
-    { key = "hsmaster",     label = "Master Healthstone (2s)" },
-    { key = "ritual",       label = "Ritual of Souls (3s/5s)" },
-    { key = "spellstone",   label = "Master Spellstone" },
-    { key = "imp",          label = "Summon Imp" },
-    { key = "felarmor",     label = "Fel Armor" },
-    { key = "fireshield",   label = "Fire Shield" },
-    { key = "unending",     label = "Unending Breath" },
-    { key = "detectinvis",  label = "Detect Invisibility" },
-    { key = "voidwalker",   label = "Summon Voidwalker" },
-    { key = "felhunter",    label = "Summon Felhunter" },
-    { key = "sacrifice",    label = "Sacrifice" },
-    { key = "soullink",     label = "Soul Link" },
-    { key = "shadowward",   label = "Shadow Ward" },
-    { key = "taintedblood", label = "Tainted Blood" },
-    { key = "mount",        label = "Mount" },
+    { key = "intellect", label = "Arcane Intellect" },
+    { key = "armor",     label = "Armor (Ice/Molten/Mage)" },
+    { key = "amplify",   label = "Amplify Magic (healer comps)" },
+    { key = "dampen",    label = "Dampen Magic (double DPS)" },
+    { key = "emerald",   label = "Mana Emerald" },
+    { key = "food",      label = "Conjure Food (2s)" },
+    { key = "water",     label = "Conjure Water (2s)" },
+    { key = "ritual",    label = "Ritual of Refreshment (3s/5s)" },
+    { key = "drink",     label = "Drink to full" },
+    { key = "barrier",   label = "Ice Barrier" },
+    { key = "mount",     label = "Mount" },
 }
 
 local function Enabled(group)
@@ -350,112 +390,80 @@ local function BuildSteps()
         steps[#steps + 1] = t
     end
 
-    -- Healthstones. Which of these show is driven by the checkboxes (via presets):
-    --  * 2s preset:   Major + Master on, Ritual off  -> conjure your pair, trade them
-    --  * 3s/5s + BGs: Ritual on, pair off            -> one soulwell, team grabs stones
-    -- (2s loop: once you trade a stone away it goes back to "not done" and the
-    -- button re-offers it, so you make -> trade -> make ...).
-    add({ id = "hs_major", group = "hsmajor", label = "Major Healthstone", macro = CFG.cast.hsMajor,
-          castName = CREATE_HS_NAME,
-          done = function() return HSStepDone("hs_major", CFG.item.hsMajor) end })
-    add({ id = "hs_master", group = "hsmaster", label = "Master Healthstone", macro = CFG.cast.hsMaster,
-          castName = CREATE_HS_NAME,
-          done = function() return HSStepDone("hs_master", CFG.item.hsMaster) end })
-    -- Ritual is done ONLY when the Soulwell actually spawns (ritualDone, set from
-    -- the SPELL_CREATE combat-log event). It deliberately does NOT count "you have
-    -- a healthstone" as done -- a warlock almost always carries their own stone,
-    -- which would make the ritual skip itself every time (it exists to drop a well
-    -- for the TEAM, not to give you a stone).
-    add({ id = "ritual", group = "ritual", label = "Ritual of Souls (soulwell for the team)", macro = CFG.cast.ritual,
-          done = function() return ritualDone end })
-
-    -- Spellstone: create it, then equip it in the wand/relic slot.
-    -- (In TBC the spellstone is a wand-slot relic: passive +spell crit, plus an
-    --  in-combat on-use that dispels all harmful magic. The dispel is a combat
-    --  button, not a prep cast -- see /mp spellstone for a macro.)
-    add({ id = "ss_make", group = "spellstone", label = "Create Master Spellstone", macro = CFG.cast.spellstone,
-          done = function() return Have(CFG.item.spellstone) or IsEquippedItem(CFG.item.spellstone) end })
-    add({ id = "ss_equip", group = "spellstone", label = "Equip Spellstone (wand slot)", macro = CFG.cast.equipSpellstone,
-          done = function() return IsEquippedItem(CFG.item.spellstone) end,
-          ready = function() return Have(CFG.item.spellstone) end })
-
-    -- Imp (needed for Fire Shield)
-    add({ id = "imp", group = "imp", label = "Summon Imp", macro = CFG.cast.summonImp,
-          castName = SUMMON_NAME[1],
-          done = function() return PetStepDone(1) end })
-
-    -- Self buffs (Fel Armor first - it's your baseline armor buff)
-    add({ id = "fa_self", group = "felarmor", label = "Fel Armor (you)", macro = CFG.cast.felArmor,
-          done = function() return HasBuff("player", CFG.buff.felArmor) end })
-    add({ id = "fs_self", group = "fireshield", label = "Fire Shield (you)", macro = CFG.cast.fireShield:format("player"),
-          done = function() return HasBuff("player", CFG.buff.fireShield) end,
-          ready = function() return PetFamily() == "Imp" end })
-    add({ id = "ub_self", group = "unending", label = "Unending Breath (you)", macro = CFG.cast.unending:format("player"),
-          done = function() return HasBuff("player", CFG.buff.unending) end })
-    add({ id = "di_self", group = "detectinvis", label = "Detect Invisibility (you)", macro = CFG.cast.detectInvis:format("player"),
-          done = function() return HasBuff("player", CFG.buff.detectInvis) end })
-
-    -- Ally buffs (per partner, scales with 2s/3s/5s)
+    -- 1) Arcane Intellect: self first, then each partner. Arcane Brilliance on
+    --    anyone counts as done (see HasIntellect).
+    add({ id = "ai_self", group = "intellect", label = "Arcane Intellect (you)", macro = CFG.cast.intellect:format("player"),
+          done = function() return HasIntellect("player") end })
     for _, u in ipairs(allies) do
-        add({ id = "fs_" .. u, group = "fireshield", label = "Fire Shield (" .. u .. ")", macro = CFG.cast.fireShield:format(u),
-              done = function() return HasBuff(u, CFG.buff.fireShield) end,
-              ready = function() return PetFamily() == "Imp" and UnitExists(u) end })
-        add({ id = "ub_" .. u, group = "unending", label = "Unending Breath (" .. u .. ")", macro = CFG.cast.unending:format(u),
-              done = function() return HasBuff(u, CFG.buff.unending) end,
-              ready = function() return UnitExists(u) end })
-        add({ id = "di_" .. u, group = "detectinvis", label = "Detect Invisibility (" .. u .. ")", macro = CFG.cast.detectInvis:format(u),
-              done = function() return HasBuff(u, CFG.buff.detectInvis) end,
+        add({ id = "ai_" .. u, group = "intellect", label = "Arcane Intellect (" .. u .. ")", macro = CFG.cast.intellect:format(u),
+              done = function() return HasIntellect(u) end,
               ready = function() return UnitExists(u) end })
     end
 
-    -- Voidwalker (for Sacrifice shield)
-    add({ id = "vw", group = "voidwalker", label = "Summon Voidwalker", macro = CFG.cast.summonVoid,
-          castName = SUMMON_NAME[2],
-          done = function() return PetStepDone(2) end })
+    -- 2) Armor: whichever the user prefers (Ice / Molten / Mage). Any one of
+    --    them satisfies the step.
+    add({ id = "armor", group = "armor", label = "Armor (Ice/Molten/Mage)", macro = PreferredArmorMacro(),
+          done = function() return HasAnyArmor() end })
+
+    -- 3) Amplify Magic (healer comps) OR Dampen Magic (double DPS) -- which one
+    --    shows is driven by the checkboxes/preset. Self + each partner.
+    add({ id = "amp_self", group = "amplify", label = "Amplify Magic (you)", macro = CFG.cast.amplify:format("player"),
+          done = function() return HasBuff("player", CFG.buff.amplify) end })
+    for _, u in ipairs(allies) do
+        add({ id = "amp_" .. u, group = "amplify", label = "Amplify Magic (" .. u .. ")", macro = CFG.cast.amplify:format(u),
+              done = function() return HasBuff(u, CFG.buff.amplify) end,
+              ready = function() return UnitExists(u) end })
+    end
+    add({ id = "damp_self", group = "dampen", label = "Dampen Magic (you)", macro = CFG.cast.dampen:format("player"),
+          done = function() return HasBuff("player", CFG.buff.dampen) end })
+    for _, u in ipairs(allies) do
+        add({ id = "damp_" .. u, group = "dampen", label = "Dampen Magic (" .. u .. ")", macro = CFG.cast.dampen:format(u),
+              done = function() return HasBuff(u, CFG.buff.dampen) end,
+              ready = function() return UnitExists(u) end })
+    end
+
+    -- 4) Mana Emerald (gem you crack for mana). Done once one is in the bags (or
+    --    a conjure just landed -- itemPending).
+    add({ id = "emerald", group = "emerald", label = "Conjure Mana Emerald", macro = CFG.cast.emerald,
+          castName = CREATE_EMERALD,
+          done = function() return ItemStepDone("emerald", EmeraldCount) end })
+
+    -- 5/6) Conjured food & water (2s: make a stack, trade some to partners).
+    --      Which of these show is driven by the checkboxes (via presets):
+    --       * 2s preset:  food + water on, ritual off  -> conjure & trade
+    --       * 3s/5s/BGs:  ritual on, food/water off     -> one table, team grabs
+    --      (2s loop: trade some away and the step re-offers, so make -> trade -> make.)
+    add({ id = "food", group = "food", label = "Conjure Food", macro = CFG.cast.food,
+          castName = CREATE_FOOD,
+          done = function() return ItemStepDone("food", FoodCount) end })
+    add({ id = "water", group = "water", label = "Conjure Water", macro = CFG.cast.water,
+          castName = CREATE_WATER,
+          done = function() return ItemStepDone("water", WaterCount) end })
+
+    -- 7) Ritual of Refreshment is done ONLY when the table actually spawns
+    --    (ritualDone, decided on channel-stop via the spell's cooldown). It
+    --    deliberately does NOT count "you have food" as done -- it exists to drop
+    --    a table for the TEAM, not to feed just you.
+    add({ id = "ritual", group = "ritual", label = "Ritual of Refreshment (table for the team)", macro = CFG.cast.ritual,
+          done = function() return ritualDone end })
+
+    -- 8) Drink to full: use conjured water until mana is topped off. Ready once
+    --    you actually have water to drink.
+    add({ id = "drink", group = "drink", label = "Drink to full", macro = DrinkMacro(),
+          done = function()
+              local mx = UnitPowerMax("player", 0) or 0
+              if mx <= 0 then return true end
+              return (UnitPower("player", 0) or 0) / mx >= 0.95
+          end,
+          ready = function() return Have(CFG.item.water) or RefreshCount() > 0 end })
 
     -- Timed finish -----------------------------------------------------
-    -- Felhunter + sac gate on STATE, not the clock: as soon as the voidwalker is
-    -- out it's time to swap. Sac/Soul Link buffs persist, so no need to wait for
-    -- the countdown. (If you trade your stones away, the healthstone step jumps
-    -- back ahead of this in the order, so the button re-offers a stone first.)
-    -- Ready once the voidwalker is out (arena sac flow); but if the voidwalker
-    -- step is turned off (e.g. the BGs preset), go straight imp -> felhunter.
-    -- We use petSummonedMax (not just the live PetRank) so the step stays ready
-    -- through the no-pet gap: when you sacrifice the VW mid-summon the pet is
-    -- gone for a beat, and a live-only check would drop Felhunter's readiness and
-    -- skip ahead to Shadow Ward. Once you've had a VW this match, Felhunter is
-    -- always reachable (and re-offered if the summon gets cut after the sac).
-    -- No castName here: the Felhunter cast has its own handling in Refresh
-    -- (felCastFrac) which offers the Voidwalker sac mid-cast.
-    add({ id = "fh", group = "felhunter", label = "Summon Felhunter", macro = CFG.cast.summonFel,
-          done = function() return PetStepDone(3) end,
-          ready = function() return EndPrepReady()
-                    and (PetRank() >= 2 or petSummonedMax >= 2 or not Enabled("voidwalker")) end })
-    add({ id = "sac", group = "sacrifice", label = "Sacrifice VW (during Felhunter cast!)", macro = CFG.cast.sacrifice,
-          done = function() return HasBuff("player", CFG.buff.sacrifice) or PetRank() >= 3 end,
-          ready = function() return EndPrepReady() and PetFamily() == "Voidwalker" end })
-    -- Ready check tolerates the felhunter spawn gap (petSummonedMax>=3): right
-    -- after the summon lands the pet isn't UnitExists yet, and a live-only check
-    -- would let Shadow Ward jump ahead of Soul Link. A press before the pet is
-    -- up just no-ops (no demon = no GCD) and retries on the next mash.
-    add({ id = "sl", group = "soullink", label = "Soul Link", macro = CFG.cast.soulLink,
-          done = function() return HasBuff("player", CFG.buff.soulLink) end,
-          ready = function() return EndPrepReady()
-                    and (PetFamily() == "Felhunter" or petSummonedMax >= 3) end })
-    -- These last steps are order-gated only (no countdown timing). The gate
-    -- countdown on the Anniversary client is unreliable to parse, and mistiming
-    -- these costs mana, so we just enforce order and let you press them when the
-    -- gate is about to open -- same as the rest of the routine.
-    add({ id = "sw", group = "shadowward", label = "Shadow Ward", macro = CFG.cast.shadowWard,
-          done = function() return HasBuff("player", CFG.buff.shadowWard) end,
+    -- Ice Barrier + mount hold until the gate is close (EndPrepReady): a fresh
+    -- barrier shouldn't be spent early, and you don't want to mount before the
+    -- last moment. Order-gated only otherwise.
+    add({ id = "barrier", group = "barrier", label = "Ice Barrier", macro = CFG.cast.barrier,
+          done = function() return HasBuff("player", CFG.buff.barrier) end,
           ready = EndPrepReady })
-    -- Tainted Blood MUST come before the mount: you can't use any ability
-    -- (yours or the pet's) while mounted. Pet abilities don't share your GCD,
-    -- so it's fine right alongside Shadow Ward.
-    add({ id = "tb", group = "taintedblood", label = "Tainted Blood", macro = CFG.cast.taintedBlood,
-          done = function() return HasBuff("pet", CFG.buff.taintedBlood) end,
-          ready = function() return EndPrepReady()
-                    and (PetFamily() == "Felhunter" or petSummonedMax >= 3) end })
     -- Mount is the very last thing (mounting locks out all abilities).
     add({ id = "mount", group = "mount", label = "Mount up (" .. MountName() .. ")", macro = MountMacro(),
           done = function() return IsMounted() end,
@@ -483,91 +491,44 @@ button:EnableMouse(false)
 button:RegisterForClicks("AnyDown") -- CLICK keybinds fire on key-down
 button:SetAttribute("type", "macro")
 
--- Spellstone swap button. Smart toggle on one keybind:
---   * stone equipped  -> dispel (off-GCD) + swap wand in
---   * wand equipped   -> re-equip the stone (arms the 30s equip cooldown so the
---                        next press can dispel)
--- The stone is equipped during prep, so its equip CD is already gone by the
--- gates and the first press dispels immediately.
-local ssButton = CreateFrame("Button", "MagePrepSpellstoneButton", UIParent, "SecureActionButtonTemplate")
-ssButton:SetSize(1, 1)
-ssButton:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
-ssButton:SetAlpha(0)
-ssButton:EnableMouse(false)
-ssButton:RegisterForClicks("AnyDown") -- single fire so the toggle doesn't undo itself
-ssButton:SetAttribute("type", "macro")
-
-local function SpellstoneMacro()
-    local wand = MagePrepDB and MagePrepDB.wand
-    if wand and wand ~= "" then
-        return "/use [noequipped:Wand] " .. CFG.item.spellstone ..
-             "\n/equip [equipped:Wand] " .. CFG.item.spellstone ..
-             "\n/equip [noequipped:Wand] " .. wand
-    end
-    -- no wand set yet: just dispel with the equipped stone
-    return "/use " .. CFG.item.spellstone
-end
-
-local function UpdateSpellstoneButton()
-    if InCombatLockdown() then return end
-    ssButton:SetAttribute("macrotext", SpellstoneMacro())
-end
-
 local currentId
-local function HaveAnyStone()
-    return Have(CFG.item.hsMajor) or Have(CFG.item.hsMaster)
-end
-
--- Felhunter-summon awareness: while you're casting Summon Felhunter we hand the
--- button the Voidwalker Sacrifice (the classic "sac during the felpup cast"),
--- and expose the cast progress so the checklist can show a % / "SAC NOW" cue.
-local FEL_NAME = GetSpellInfo(691) or "Summon Felhunter"  -- 691 = Summon Felhunter
-local felCastFrac = nil   -- 0..1 while summoning felhunter, else nil (read by UI)
-local felAction = nil     -- action-line override while sac is offered
-local function SacDone()
-    return HasBuff("player", CFG.buff.sacrifice) or PetRank() >= 3
-end
-local function FelSummonProgress()
-    local name, _, _, startMs, endMs = UnitCastingInfo("player")
-    if not name or name ~= FEL_NAME then return nil end
-    if not startMs or not endMs or endMs <= startMs then return 0 end
-    local frac = (GetTime() * 1000 - startMs) / (endMs - startMs)
-    if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
-    return frac
+local function HaveAnyRefresh()
+    return RefreshCount() > 0
 end
 
 local function Refresh()
     if #steps == 0 then BuildSteps() end
-    -- Drop a healthstone pending-latch the instant the real stone lands, so the
-    -- 2s make -> trade -> make loop re-offers with no delay. (Pet ranks are
-    -- monotonic for the match and reset on a new arena.)
-    if hsPending.hs_major and Have(CFG.item.hsMajor) then hsPending.hs_major = nil end
-    if hsPending.hs_master and Have(CFG.item.hsMaster) then hsPending.hs_master = nil end
+    -- Drop a conjure pending-latch the instant the real item lands, so the 2s
+    -- make -> trade -> make loop re-offers with no delay. (itemPending is per
+    -- match and reset on a new arena.)
+    if itemPending.emerald and EmeraldCount() > 0 then itemPending.emerald = nil end
+    if itemPending.food and FoodCount() > 0 then itemPending.food = nil end
+    if itemPending.water and WaterCount() > 0 then itemPending.water = nil end
     local step = FirstIncomplete()
-    local macro = step and step.macro or ""
-    felCastFrac = FelSummonProgress()
-    felAction = nil
+    -- Drink macro is bag-dependent; rebuild live so a just-conjured / table
+    -- biscuit is what the button actually uses (BuildSteps may have baked an
+    -- empty-bag fallback earlier).
+    local macro = ""
+    if step then
+        if step.id == "drink" then
+            macro = DrinkMacro()
+        elseif step.id == "armor" then
+            macro = PreferredArmorMacro()
+        elseif step.id == "mount" then
+            macro = MountMacro()
+        else
+            macro = step.macro or ""
+        end
+    end
     if IsCasting(RITUAL_NAME) then
-        -- Ritual of Souls in progress: cast nothing so a stray press can't
-        -- interrupt the channel (teammates need the soulwell to finish).
+        -- Ritual of Refreshment in progress: cast nothing so a stray press can't
+        -- interrupt the channel (teammates need the table to finish).
         macro = ""
         currentId = "ritual"
-    elseif felCastFrac then
-        -- mid-felhunter-summon: offer the VW sac (if enabled, not yet done, and
-        -- the voidwalker is still out), otherwise cast nothing so a stray press
-        -- can't interrupt the summon.
-        if Enabled("sacrifice") and not SacDone() and PetFamily() == "Voidwalker" then
-            macro = CFG.cast.sacrifice
-            currentId = "sac"
-            felAction = "Sacrifice Voidwalker!"
-        else
-            macro = ""
-            currentId = nil
-        end
     elseif step and step.castName and IsCasting(step.castName) then
-        -- Mid-cast on this step's OWN spell (summon / conjure): cast nothing so a
-        -- mashed press can't queue a duplicate in the spell-queue window. Keep
-        -- currentId pointed at the step so cast-SUCCESS latches the right tier.
+        -- Mid-cast on this step's OWN spell (a conjure): cast nothing so a mashed
+        -- press can't queue a duplicate in the spell-queue window. Keep currentId
+        -- pointed at the step so cast-SUCCESS latches the right item.
         macro = ""
         currentId = step.id
     else
@@ -575,7 +536,7 @@ local function Refresh()
     end
     -- While a trade window is open and we still owe an accept, the button's only
     -- job is to accept (handled in PreClick), so blank the prep cast. But once
-    -- WE'VE accepted (our stone is in, waiting on them), un-blank so you can keep
+    -- WE'VE accepted (our food/water is in, waiting on them), un-blank so you can keep
     -- prepping while they take their time -- casting doesn't cancel the trade, and
     -- if they never accept you're not jammed. (If they change the trade our accept
     -- resets, iAccepted flips false, and we blank again to re-accept.)
@@ -765,32 +726,9 @@ local actionFS = MP_FS(actionBlock, 13)
 actionFS:SetJustifyH("LEFT")
 actionFS:SetWordWrap(true)
 
--- felhunter cast bar (only visible mid-summon)
-local castBlock = CreateFrame("Frame", nil, ui)
-castBlock:SetPoint("TOPLEFT", actionBlock, "BOTTOMLEFT", 12, -6)
-castBlock:SetPoint("RIGHT", ui, "RIGHT", -12, 0)
-castBlock:SetHeight(1)
-do
-    local nm = MP_FS(castBlock, 11)
-    nm:SetPoint("TOPLEFT", 0, 0)
-    nm:SetText("Summon Felhunter")
-    nm:SetTextColor(0.78, 0.63, 0.35)
-end
-local castPct = MP_FS(castBlock, 11)
-castPct:SetPoint("TOPRIGHT", 0, 0)
-local castBar = CreateFrame("StatusBar", nil, castBlock, "BackdropTemplate")
-castBar:SetPoint("BOTTOMLEFT", 0, 2); castBar:SetPoint("BOTTOMRIGHT", 0, 2)
-castBar:SetHeight(7)
-castBar:SetBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
-castBar:SetBackdropColor(0, 0, 0, 0.5)
-castBar:SetBackdropBorderColor(0.28, 0.40, 0.55, 0.5)
-castBar:SetStatusBarTexture(WHITE8)
-castBar:SetMinMaxValues(0, 1)
-castBlock:Hide()
-
--- healthstone trade progress ("Healthstones traded: 1/2")
+-- food/water trade progress ("Food/water traded: 1/2")
 local tradeFS = MP_FS(ui, 11)
-tradeFS:SetPoint("TOPLEFT", castBlock, "BOTTOMLEFT", 0, -5)
+tradeFS:SetPoint("TOPLEFT", actionBlock, "BOTTOMLEFT", 12, -6)
 tradeFS:SetPoint("RIGHT", ui, "RIGHT", -12, 0)
 tradeFS:SetJustifyH("LEFT")
 tradeFS:SetText("")
@@ -909,8 +847,6 @@ function MagePrep_UpdateUI()
     actionFS:SetTextColor(0.92, 0.96, 1.00)
     if not key then
         actionFS:SetText("|cffff6666No key bound|r - type |cffffffff/mp bind <KEY>|r")
-    elseif felAction then
-        actionFS:SetText("|cffff5555" .. felAction .. "|r")
     elseif curLabel then
         actionFS:SetText(curLabel)
     elseif anyIncomplete then
@@ -940,41 +876,21 @@ function MagePrep_UpdateUI()
 
     actionBlock:SetHeight(20 + math.max(16, actionFS:GetStringHeight() or 13) + 9)
 
-    -- felhunter summon progress bar (fills orange, flips green at 90%)
-    if felCastFrac then
-        local pct = math.floor(felCastFrac * 100 + 0.5)
-        castBar:SetValue(felCastFrac)
-        if felCastFrac >= 0.90 then
-            castBar:SetStatusBarColor(0.42, 0.82, 0.42)
-            castPct:SetText(pct .. "%  SAC NOW")
-            castPct:SetTextColor(1, 0.48, 0.42)
-        else
-            castBar:SetStatusBarColor(0.88, 0.63, 0.32)
-            castPct:SetText(pct .. "%")
-            castPct:SetTextColor(0.94, 0.82, 0.38)
-        end
-        castBlock:SetHeight(26)
-        castBlock:Show()
-    else
-        castBlock:SetHeight(1)
-        castBlock:Hide()
-    end
-
-    -- trade progress (2s only; in 3s/5s people grab from the soulwell)
-    -- count only warlock-free partners - a warlock partner never needs a stone
-    local partners = #StonePartners()
-    if UseRitual() then
-        tradeFS:SetText(ritualDone and "|cff55ff55Soulwell up - team grabs their own|r" or "")
+    -- trade progress (2s only; in 3s/5s people grab from the refreshment table)
+    -- count only non-mage partners - a mage partner conjures their own
+    local partners = #FoodPartners()
+    if UseTable() then
+        tradeFS:SetText(ritualDone and "|cff55ff55Table up - team grabs their own|r" or "")
     elseif partners > 0 then
         local n = TradedCount()
         local col = (n >= partners) and "|cff55ff55" or "|cff88ccff"
-        tradeFS:SetText(col .. "Healthstones traded: " .. n .. "/" .. partners .. "|r")
+        tradeFS:SetText(col .. "Food/water traded: " .. n .. "/" .. partners .. "|r")
     else
         tradeFS:SetText("")
     end
 
     -- size the window to the real (possibly wrapped) content height
-    local h = 29 + actionBlock:GetHeight() + 6 + castBlock:GetHeight() + 5
+    local h = 29 + actionBlock:GetHeight() + 6
         + (tradeFS:GetStringHeight() or 0) + 6 + rowsH + 8
     ui:SetHeight(h + 2)
 end
@@ -1003,19 +919,19 @@ local function HideUI()
 end
 
 -- =====================================================================
--- Trade auto-fill: drop your healthstones into the trade window.
+-- Trade auto-fill: drop your conjured food/water into the trade window.
 -- Filling the trade window is NOT a protected action (this is how
 -- TradeDispenser etc. work), so it runs from the TRADE_SHOW event. You
 -- still click Accept yourself (AcceptTrade needs a real click).
 -- =====================================================================
 local tradeArmed = false      -- one-shot arm, for testing outside an arena
-local tradeHadStones = false  -- did we put stones in the current trade?
+local tradeHadRefresh = false -- did we put food/water in the current trade?
 local tradePartner = nil      -- who we're trading with (captured at TRADE_SHOW)
-local tradeStartHS = 0        -- healthstone count when the trade opened
+local tradeStartRefresh = 0   -- food/water count when the trade opened
 -- (iAccepted is declared earlier, near the trade-tracking state, so Refresh can read it)
 local tradeFilledAt = 0       -- when we auto-filled; wait a beat before accepting
 local TRADE_SETTLE = 0.4      -- so the item-placement confirms land before we accept
--- (tradedNames / TradedCount / HSCount are declared earlier, near Partners())
+-- (tradedNames / TradedCount / RefreshCount are declared earlier, near Partners())
 
 -- container API works via C_Container (modern) or legacy globals
 local C = _G.C_Container
@@ -1045,8 +961,13 @@ local function FindBagItem(name)
     end
 end
 
-local function PlaceInTrade(name, tradeSlot)
-    local bag, slot = FindBagItem(name)
+-- Place the first bag item that matches any name in `list` into a trade slot.
+local function PlaceInTrade(list, tradeSlot)
+    local bag, slot
+    for _, nm in ipairs(list) do
+        bag, slot = FindBagItem(nm)
+        if bag then break end
+    end
     if not bag then return false end
     ClearCursor()
     PickupItem(bag, slot)
@@ -1058,30 +979,31 @@ end
 local function FillTrade()
     tradeArmed = false
     local placed = 0
-    if PlaceInTrade(CFG.item.hsMajor, 1) then placed = placed + 1 end
-    if PlaceInTrade(CFG.item.hsMaster, 2) then placed = placed + 1 end
-    tradeHadStones = placed > 0
+    if PlaceInTrade(FOOD_ITEMS, 1) then placed = placed + 1 end
+    if PlaceInTrade(WATER_ITEMS, 2) then placed = placed + 1 end
+    tradeHadRefresh = placed > 0
     if placed > 0 then
         tradeFilledAt = GetTime()   -- let the placement confirms settle before we accept
-        print("|cff66b3ffMagePrep|r: placed " .. placed .. " healthstone(s) - keep pressing your button to accept")
+        print("|cff66b3ffMagePrep|r: placed " .. placed .. " conjured item(s) - keep pressing your button to accept")
     else
-        print("|cff66b3ffMagePrep|r: no healthstones in bags to trade (conjure a pair first)")
+        print("|cff66b3ffMagePrep|r: no conjured food/water in bags to trade (conjure some first)")
     end
 end
 
--- How many of MY offered trade items are healthstones (so we only accept a
--- trade that actually has the stones in it).
-local function StonesInTrade()
+-- How many of MY offered trade items are conjured food/water (so we only accept
+-- a trade that actually has the items in it). Conjured items are the only trade
+-- goods MagePrep ever places, and their names all start with "Conjured".
+local function RefreshInTrade()
     local n = 0
     for i = 1, 7 do
         local link = GetTradePlayerItemLink and GetTradePlayerItemLink(i)
-        if link and link:find("Healthstone", 1, true) then n = n + 1 end
+        if link and link:find("Conjured", 1, true) then n = n + 1 end
     end
     return n
 end
 
 -- Is the person we're trading with actually one of our teammates? (Never
--- auto-accept a stranger's trade - only stones we placed or a teammate's gift.)
+-- auto-accept a stranger's trade - only items we placed or a teammate's gift.)
 local function TradeFromTeammate()
     local g = UnitGUID("npc")
     if not g then return false end
@@ -1100,12 +1022,12 @@ local function TargetHasItems()
     return false
 end
 
--- First partner (2s: party1) who still needs a stone. Skips anyone already
+-- First partner (2s: party1) who still needs food/water. Skips anyone already
 -- traded this match and anyone not currently present.
 local function NextTradePartner()
-    -- StonePartners() excludes warlocks (they make their own), so we never open
-    -- a trade window with a partner who'll never accept it.
-    for _, u in ipairs(StonePartners()) do
+    -- FoodPartners() excludes mages (they make their own), so we never open a
+    -- trade window with a partner who'll never accept it.
+    for _, u in ipairs(FoodPartners()) do
         if UnitExists(u) and not HasTraded(u) then
             return u, UnitName(u)
         end
@@ -1114,15 +1036,15 @@ end
 
 -- Fold trade handling into the SPAM key. PreClick runs on the same hardware
 -- press (before the secure cast), so mashing your normal button:
---   * accepts an open stone-trade (AcceptTrade), and
---   * opens a trade with the next partner who needs a stone (InitiateTrade).
+--   * accepts an open food/water trade (AcceptTrade), and
+--   * opens a trade with the next partner who needs food/water (InitiateTrade).
 -- Both are legal from this hardware context; InitiateTrade(unit) does NOT change
 -- your target, so you keep pressing through the rest of prep uninterrupted.
 local lastInitiate = 0
 local lastTradeClosed = 0        -- set on TRADE_CLOSED; blocks an instant empty re-open
 local TRADE_REOPEN_CD = 1.5      -- > the 0.4s bag-drop confirm, with margin for bag lag
 button:SetScript("PreClick", function()
-    -- 1) a trade is already open -> accept it if our stones are in. AcceptTrade()
+    -- 1) a trade is already open -> accept it if our food/water is in. AcceptTrade()
     -- TOGGLES, so calling it again while already accepted un-accepts you (green ->
     -- gray flicker). Only accept when our side isn't accepted yet; iAccepted is
     -- kept in sync from TRADE_ACCEPT_UPDATE. (The prep cast is blanked in Refresh
@@ -1135,10 +1057,10 @@ button:SetScript("PreClick", function()
         -- stuck states. We just wait it out, then accept once when it clears.
         local acceptBtn = _G.TradeFrameTradeButton
         local canAccept = (not acceptBtn) or acceptBtn:IsEnabled()
-        -- Accept when EITHER our stones are in (the give flow) OR a teammate has
-        -- put something in for us (food/water back). Never a stranger, never an
+        -- Accept when EITHER our food/water is in (the give flow) OR a teammate
+        -- has put something in for us (an item back). Never a stranger, never an
         -- empty window.
-        local shouldAccept = StonesInTrade() > 0
+        local shouldAccept = RefreshInTrade() > 0
                              or (TradeFromTeammate() and TargetHasItems())
         if shouldAccept and not iAccepted and canAccept
            and (GetTime() - tradeFilledAt) > TRADE_SETTLE then
@@ -1147,12 +1069,12 @@ button:SetScript("PreClick", function()
         end
         return
     end
-    -- 2) 2s only: we hold a stone and a partner still needs one -> open the trade.
-    -- The close cooldown covers the gap right after a trade completes: the stone
-    -- has left the bags but HasTraded() isn't recorded until the bag-drop confirm
-    -- lands (~0.4s later), so without it a mash would re-open an empty trade with
-    -- the partner we just finished with.
-    if AutoTradeOn() and InArena() and not UseRitual() and HaveAnyStone()
+    -- 2) 2s only: we hold food/water and a partner still needs some -> open the
+    -- trade. The close cooldown covers the gap right after a trade completes: the
+    -- item has left the bags but HasTraded() isn't recorded until the bag-drop
+    -- confirm lands (~0.4s later), so without it a mash would re-open an empty
+    -- trade with the partner we just finished with.
+    if AutoTradeOn() and InArena() and not UseTable() and HaveAnyRefresh()
        and (GetTime() - lastInitiate) > 1.0
        and (GetTime() - lastTradeClosed) > TRADE_REOPEN_CD then
         local u = NextTradePartner()
@@ -1171,10 +1093,10 @@ acceptBtn:SetScript("OnClick", function()
         print("|cff66b3ffMagePrep|r: no trade window open")
         return
     end
-    if StonesInTrade() > 0 then
+    if RefreshInTrade() > 0 then
         AcceptTrade()
     else
-        print("|cff66b3ffMagePrep|r: no healthstone in the trade yet - not accepting")
+        print("|cff66b3ffMagePrep|r: no conjured food/water in the trade yet - not accepting")
     end
 end)
 
@@ -1182,12 +1104,15 @@ end)
 -- Options panel (checkboxes to include/exclude step groups)
 -- =====================================================================
 -- Presets: one click sets a whole configuration of checkboxes.
--- Major Healthstone + Master Spellstone are left OFF in every preset (personal
--- preference); tick them yourself if you use them.
 local PRESETS = {
-    ["2s"]   = { label = "2s",     disabled = { hsmajor = true, spellstone = true, ritual = true } },
-    ["3s5s"] = { label = "3s / 5s", disabled = { hsmajor = true, hsmaster = true, spellstone = true } },
-    ["bg"]   = { label = "BGs",    disabled = { hsmajor = true, hsmaster = true, spellstone = true, taintedblood = true, voidwalker = true, sacrifice = true, shadowward = true } },
+    -- 2s: conjure + trade food/water; no ritual table; Amplify on, Dampen off
+    -- (healer-comp default).
+    ["2s"]   = { label = "2s",      disabled = { ritual = true, dampen = true } },
+    -- 3s/5s: refreshment table for the team; no manual food/water; Amplify on.
+    ["3s5s"] = { label = "3s / 5s", disabled = { food = true, water = true, dampen = true } },
+    -- BGs: skip the party amp/dampen spam + table + drink/mount fuss; keep
+    -- intellect / armor / emerald / barrier.
+    ["bg"]   = { label = "BGs",     disabled = { amplify = true, dampen = true, food = true, water = true, ritual = true, drink = true, mount = true } },
     -- "custom" restores the user's last hand-tuned checkbox set (saved in
     -- MagePrepDB.customDisabled). Hand-editing any box also flips to this.
     ["custom"] = { label = "Custom", custom = true },
@@ -1423,9 +1348,9 @@ oy = oy - 32
 -- step-group checkboxes, grouped into sections (labels come from GROUPS; a
 -- trailing "(...)" qualifier becomes the right-aligned note)
 local GROUP_SECTIONS = {
-    { title = "STONES", keys = { "hsmajor", "hsmaster", "ritual", "spellstone" } },
-    { title = "BUFFS",  keys = { "imp", "felarmor", "fireshield", "unending", "detectinvis" } },
-    { title = "FINISH", keys = { "voidwalker", "felhunter", "sacrifice", "soullink", "shadowward", "taintedblood", "mount" } },
+    { title = "BUFFS",  keys = { "intellect", "armor", "amplify", "dampen" } },
+    { title = "WATER",  keys = { "emerald", "food", "water", "ritual", "drink" } },
+    { title = "FINISH", keys = { "barrier", "mount" } },
 }
 local GROUP_LABEL, GROUP_NOTE = {}, {}
 for _, g in ipairs(GROUPS) do
@@ -1470,9 +1395,55 @@ for _, sec in ipairs(GROUP_SECTIONS) do
     oy = oy - 8
 end
 
+-- armor preference: pick which armor the armor step casts (segmented control)
+SectionHeader("ARMOR")
+local ARMOR_ORDER = { { "ice", "Ice" }, { "molten", "Molten" }, { "mage", "Mage" } }
+local armorSeg = {}
+local UpdateArmorSeg
+local armorTrack = CreateFrame("Frame", nil, opt, "BackdropTemplate")
+armorTrack:SetPoint("TOPLEFT", 14, oy)
+armorTrack:SetPoint("RIGHT", opt, "RIGHT", -14, 0)
+armorTrack:SetHeight(22)
+armorTrack:SetBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
+armorTrack:SetBackdropColor(0, 0, 0, 0.4)
+armorTrack:SetBackdropBorderColor(0.22, 0.32, 0.45, 1)
+for i, pair in ipairs(ARMOR_ORDER) do
+    local key, text = pair[1], pair[2]
+    local b = CreateFrame("Button", nil, armorTrack)
+    b:SetSize(100, 18)
+    b:SetPoint("LEFT", 2 + (i - 1) * 101, 0)
+    b.bg = MP_Tex(b)
+    b.bg:SetAllPoints(); b.bg:SetVertexColor(0.22, 0.45, 0.82, 1); b.bg:Hide()
+    b.txt = MP_FS(b, 11)
+    b.txt:SetPoint("CENTER", 0, 0); b.txt:SetText(text)
+    b:SetScript("OnClick", function()
+        MagePrepDB = MagePrepDB or {}
+        MagePrepDB.armorPreference = key
+        UpdateArmorSeg()
+        BuildSteps(); Refresh()
+    end)
+    b:SetScript("OnEnter", function()
+        if ArmorPref() ~= key then b.txt:SetTextColor(0.78, 0.88, 0.98) end
+    end)
+    b:SetScript("OnLeave", function() if UpdateArmorSeg then UpdateArmorSeg() end end)
+    armorSeg[key] = b
+end
+UpdateArmorSeg = function()
+    local cur = ArmorPref()
+    for key, b in pairs(armorSeg) do
+        if key == cur then
+            b.bg:Show(); b.txt:SetTextColor(0.92, 0.96, 1.00)
+        else
+            b.bg:Hide(); b.txt:SetTextColor(0.42, 0.54, 0.68)
+        end
+    end
+end
+UpdateArmorSeg()
+oy = oy - 30
+
 -- extras
 SectionHeader("EXTRAS")
-MakeCheck("Auto-fill healthstones on trade", "arena",
+MakeCheck("Auto-fill food/water on trade", "arena",
     function() return AutoTradeOn() end,
     function(v)
         MagePrepDB = MagePrepDB or {}
@@ -1496,11 +1467,11 @@ MakeCheck("Debug logging", "traces to chat",
     end)
 oy = oy - 10
 
--- Felhunter unlock slider: per-preset (each of 2s / 3s5s / BGs / Custom stores
--- its own value). Default 12s; 0 = no gate.
+-- Finish unlock slider: per-preset (each of 2s / 3s5s / BGs / Custom stores its
+-- own value). Gates the timed finish (Ice Barrier + mount). Default 12s; 0 = no gate.
 local function EndPrepSliderLabel(v)
-    if v <= 0 then return "Felhunter unlock: anytime (no gate)" end
-    return "Felhunter unlock: " .. v .. "s left on the countdown"
+    if v <= 0 then return "Ice Barrier unlock: anytime (no gate)" end
+    return "Ice Barrier unlock: " .. v .. "s left on the countdown"
 end
 local epslider = CreateFrame("Slider", "MagePrepEndPrepSlider", opt, "OptionsSliderTemplate")
 epslider:SetPoint("TOPLEFT", 20, oy - 16)
@@ -1608,12 +1579,6 @@ OwnedMounts = function()
                     addName((GetItemInfo(link)) or link:match("%[(.-)%]"))
                 end
             end
-        end
-    end
-    -- warlock class mounts (spells, not bag items) if the player knows them
-    for _, id in ipairs(WARLOCK_MOUNT_IDS) do
-        if not IsSpellKnown or IsSpellKnown(id) then
-            addName(GetSpellInfo(id))
         end
     end
     table.sort(names)
@@ -1754,6 +1719,7 @@ opt:HookScript("OnShow", function()
     if opt.FitOptionsArt then opt.FitOptionsArt() end
     RefreshKeyButtons()
     UpdatePresetSeg()
+    if UpdateArmorSeg then UpdateArmorSeg() end
     for _, r in ipairs(allChecks) do r:Refresh() end
 end)
 
@@ -1833,29 +1799,13 @@ ev:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
 ev:RegisterUnitEvent("UNIT_SPELLCAST_STOP", "player")
 ev:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED", "player")
 ev:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
--- Channels (Ritual of Souls) don't fire the *_START cast events, so register the
+-- Channels (Ritual of Refreshment) don't fire the *_START cast events, so register the
 -- channel equivalents too. They fall through to the default Refresh() branch,
 -- which blanks the button the instant the channel begins -- the same mid-cast
 -- mash protection the timed casts already get.
 ev:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START", "player")
 ev:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "player")
 ev:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", "player")
-
--- Live updater: while Summon Felhunter is casting, refresh ~10x/sec so the
--- progress % and the swap-to-sacrifice button stay current, plus one final
--- refresh when the cast ends to return to the normal flow.
-local felTicker = CreateFrame("Frame")
-felTicker.t = 0
-felTicker:SetScript("OnUpdate", function(self, dt)
-    self.t = self.t + dt
-    if self.t < 0.1 then return end
-    self.t = 0
-    local casting = FelSummonProgress() ~= nil
-    if casting or self.was then
-        self.was = casting
-        Refresh()
-    end
-end)
 
 local function OnCountdownMessage(msg)
     if not msg then return end
@@ -1866,15 +1816,16 @@ local function OnCountdownMessage(msg)
     elseif msg:find("has begun") or msg:find("gates are open") then gateAt = GetTime() end
 end
 
--- Decide whether a just-ended Ritual of Souls channel actually created the Soulwell.
--- There's no combat-log event for the well and the channel ends early on success,
--- so we key off the spell's cooldown: a successful ritual triggers its real ~5min
--- cooldown; a cancel/interrupt does not. We only count a cooldown that STARTED
--- during this channel (start >= channelStart - 1s) so a leftover cooldown from an
--- earlier success can't mark a later cancel as done. GCD is excluded via dur > 10.
+-- Decide whether a just-ended Ritual of Refreshment channel actually created the
+-- table. There's no combat-log event for it and the channel ends early on
+-- success, so we key off the spell's cooldown: a successful ritual triggers its
+-- real long cooldown; a cancel/interrupt does not. We only count a cooldown that
+-- STARTED during this channel (start >= channelStart - 1s) so a leftover cooldown
+-- from an earlier success can't mark a later cancel as done. GCD is excluded via
+-- dur > 10.
 local function CheckRitualCompletion(channelStart)
     if ritualDone or not channelStart then return end
-    local start, dur = GetSpellCooldown(29893)
+    local start, dur = GetSpellCooldown(43987)
     if start and start > 0 and dur and dur > 10 and start >= (channelStart - 1) then
         ritualDone = true
         DPrint("ritualDone <- cooldown", "cd=" .. tostring(start) .. "/" .. tostring(dur))
@@ -1893,19 +1844,17 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         -- resolves, so this never nils anything and is a no-op where load-time
         -- values were already correct. BuildSteps re-runs per match, so step
         -- castNames pick these up before any arena.
-        CREATE_HS_NAME = GetSpellInfo(6201)  or CREATE_HS_NAME
-        SUMMON_NAME[1] = GetSpellInfo(688)   or SUMMON_NAME[1]
-        SUMMON_NAME[2] = GetSpellInfo(697)   or SUMMON_NAME[2]
-        SUMMON_NAME[3] = GetSpellInfo(691)   or SUMMON_NAME[3]
-        RITUAL_NAME    = GetSpellInfo(29893) or RITUAL_NAME
-        FEL_NAME       = GetSpellInfo(691)   or FEL_NAME
+        CREATE_EMERALD = GetSpellInfo(27101) or CREATE_EMERALD
+        CREATE_FOOD    = GetSpellInfo(33717) or CREATE_FOOD
+        CREATE_WATER   = GetSpellInfo(27090) or CREATE_WATER
+        RITUAL_NAME    = GetSpellInfo(43987) or RITUAL_NAME
         if not MagePrepDB.disabled then
-            MagePrepDB.disabled = { hsmajor = true, spellstone = true, ritual = true } -- 2s preset
+            MagePrepDB.disabled = { ritual = true, dampen = true } -- 2s preset
             MagePrepDB.preset = "2s"
         end
+        MagePrepDB.armorPreference = MagePrepDB.armorPreference or "ice"
         ApplyPos()
         ui.locked = MagePrepDB.locked or false
-        UpdateSpellstoneButton()
         if DBIcon and ldbObj then
             MagePrepDB.minimap = MagePrepDB.minimap or {}
             if not DBIcon:IsRegistered("MagePrep") then
@@ -1916,7 +1865,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             print("|cff66b3ffMagePrep|r loaded. Quick start:")
             print("  1) Left-click the |cffffffffminimap icon|r for options/presets, then set your keys in the |cffffffffKeybinds|r section")
             print("     (or use |cffffffff/mp bind SHIFT-E|r for the next-step key)")
-            print("  2) |cffffffff/mp wand <your wand name>|r for the spellstone dispel/swap")
+            print("  2) Pick your armor + preset in |cffffffff/mp options|r")
             print("  3) Right-click the minimap icon (or |cffffffff/mp test|r) to peek at the checklist")
             print("  In the arena: just mash your bound key - it does each step in order.")
         end
@@ -1926,8 +1875,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             wipe(tradedNames)     -- fresh trade tracking each match
             wipe(tradedGUIDs)
             tradeGUID = nil
-            petSummonedMax = 0    -- fresh creation-delay latches each match
-            wipe(hsPending)
+            wipe(itemPending)     -- fresh creation-delay latches each match
             ritualDone = false
             ritualChannelStart = nil
             ui.fading = false
@@ -1950,13 +1898,13 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
                 ritualChannelStart = GetTime()
                 DPrint("RITUAL channel start")
             elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" and ritualChannelStart then
-                -- Completion signal: Ritual of Souls has NO combat-log event for the
-                -- Soulwell and the channel ends EARLY when teammates click (nominal
-                -- 60s, real success ~6s), so neither a create event nor the channel
-                -- duration works. What IS reliable: a successful ritual puts the spell
-                -- on its real ~5min cooldown; a cancel/interrupt leaves no cooldown.
-                -- So if Ritual is on a long cooldown that STARTED during this channel,
-                -- the well spawned. (Confirmed via /mp debug: cd=.../300 on success.)
+                -- Completion signal: Ritual of Refreshment has NO combat-log event
+                -- for the table and the channel ends EARLY when teammates click, so
+                -- neither a create event nor the channel duration works. What IS
+                -- reliable: a successful ritual puts the spell on its real long
+                -- cooldown; a cancel/interrupt leaves no cooldown. So if Ritual is
+                -- on a long cooldown that STARTED during this channel, the table
+                -- spawned. (Confirmed via /mp debug: cd=.../... on success.)
                 CheckRitualCompletion(ritualChannelStart)
                 -- Re-check shortly after in case the cooldown registers a beat late.
                 local started = ritualChannelStart
@@ -1970,28 +1918,24 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         if arg1 == "player" and arg3 then
             local name = GetSpellInfo(arg3)
-            if debugOn and (name == RITUAL_NAME or name == SUMMON_NAME[1] or name == SUMMON_NAME[2]
-                or name == SUMMON_NAME[3] or name == CREATE_HS_NAME) then
+            if debugOn and (name == RITUAL_NAME or name == CREATE_EMERALD
+                or name == CREATE_FOOD or name == CREATE_WATER) then
                 DPrint("SUCCEEDED", "spell=" .. tostring(name))
             end
-            -- NOTE: Ritual of Souls is a CHANNEL, so SUCCEEDED fires when the
-            -- channel *starts*, not when it finishes. Latching ritualDone here
-            -- meant a cancelled/interrupted ritual still counted as complete.
+            -- NOTE: Ritual of Refreshment is a CHANNEL, so SUCCEEDED fires when
+            -- the channel *starts*, not when it finishes. Latching ritualDone
+            -- here meant a cancelled/interrupted ritual still counted as complete.
             -- Completion is decided on CHANNEL_STOP via the spell's cooldown
             -- (CheckRitualCompletion), so we do nothing for the ritual here.
-            if name == SUMMON_NAME[1] then
-                if petSummonedMax < 1 then petSummonedMax = 1 end
+            -- Conjures: latch the item pending until it lands (cleared in Refresh).
+            if name == CREATE_EMERALD then
+                if currentId == "emerald" then itemPending.emerald = true end
                 Refresh()
-            elseif name == SUMMON_NAME[2] then
-                if petSummonedMax < 2 then petSummonedMax = 2 end
+            elseif name == CREATE_FOOD then
+                if currentId == "food" then itemPending.food = true end
                 Refresh()
-            elseif name == SUMMON_NAME[3] then
-                if petSummonedMax < 3 then petSummonedMax = 3 end
-                Refresh()
-            elseif name == CREATE_HS_NAME then
-                -- ranks share one name; latch whichever tier we're on right now
-                if currentId == "hs_master" then hsPending.hs_master = true
-                elseif currentId == "hs_major" then hsPending.hs_major = true end
+            elseif name == CREATE_WATER then
+                if currentId == "water" then itemPending.water = true end
                 Refresh()
             end
         end
@@ -2016,74 +1960,73 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         iAccepted = (arg1 == 1)
         partnerAccepted = (arg2 == 1)
         -- When BOTH sides are green the trade is about to go through. Snapshot how
-        -- many healthstones are in OUR side right now: if it's >0, this completion
-        -- credits the partner regardless of bag-count timing (a conjure landing
-        -- mid-trade or a bag-update lag can otherwise hide the count delta and make
-        -- us re-trade someone who already got a stone).
+        -- many food/water items are in OUR side right now: if it's >0, this
+        -- completion credits the partner regardless of bag-count timing (a conjure
+        -- landing mid-trade or a bag-update lag can otherwise hide the count delta
+        -- and make us re-trade someone who already got their food/water).
         if iAccepted and partnerAccepted then
-            local s = StonesInTrade()
-            if s > tradeCommitStones then tradeCommitStones = s end
+            local s = RefreshInTrade()
+            if s > tradeCommitRefresh then tradeCommitRefresh = s end
         end
         Refresh()   -- un-blank prep once accepted / re-blank if our accept reset
     elseif event == "TRADE_PLAYER_ITEM_CHANGED" or event == "TRADE_TARGET_ITEM_CHANGED" then
         -- Contents changed on either side -> WoW un-accepted both sides. Clear our
         -- mirror so PreClick will accept again once the anti-scam lockout clears,
-        -- and drop the both-accepted stone snapshot so it re-captures at the real
+        -- and drop the both-accepted food/water snapshot so it re-captures at the real
         -- completion (a fresh accept is required now). Re-blank the prep cast via
         -- Refresh since we're back to "needs accept".
         iAccepted = false
         partnerAccepted = false
-        tradeCommitStones = 0
+        tradeCommitRefresh = 0
         Refresh()
     elseif event == "TRADE_SHOW" then
         iAccepted = false
         partnerAccepted = false
-        tradeCommitStones = 0
-        tradeHadStones = false
-        tradeStartHS = HSCount()
+        tradeCommitRefresh = 0
+        tradeHadRefresh = false
+        tradeStartRefresh = RefreshCount()
         tradeGUID = UnitGUID("npc")   -- the unit we're trading with (either direction)
         tradePartner = (TradeFrameRecipientNameText and TradeFrameRecipientNameText:GetText())
         if not tradePartner or tradePartner == "" then tradePartner = UnitName("npc") end
         if not tradePartner or tradePartner == "" then tradePartner = "partner" end
-        -- Only auto-fill our stones if THIS partner still needs one. Otherwise a
-        -- teammate re-opening a trade to hand US something (a mage giving food)
-        -- would get another stone dumped in - and possibly accepted away.
-        local giveStone = AutoTradeOn() and InArena() and not UseRitual()
-                          and HaveAnyStone() and not HasTraded("npc")
-        if tradeArmed or giveStone then FillTrade() end
+        -- Only auto-fill our food/water if THIS partner still needs some.
+        -- Otherwise a teammate re-opening a trade to hand US something back would
+        -- get more items dumped in - and possibly accepted away.
+        local giveRefresh = AutoTradeOn() and InArena() and not UseTable()
+                          and HaveAnyRefresh() and not HasTraded("npc")
+        if tradeArmed or giveRefresh then FillTrade() end
         Refresh()                     -- blank the prep cast while the window is up
     elseif event == "TRADE_CLOSED" then
         lastTradeClosed = GetTime()   -- start the re-open cooldown (see PreClick)
         iAccepted = false
         partnerAccepted = false
-        local partner, guid, before = tradePartner, tradeGUID, tradeStartHS
-        local committed = tradeCommitStones   -- our stones in-window when both accepted
-        tradeHadStones = false; tradePartner = nil; tradeGUID = nil; tradeCommitStones = 0
+        local partner, guid, before = tradePartner, tradeGUID, tradeStartRefresh
+        local committed = tradeCommitRefresh   -- our food/water in-window when both accepted
+        tradeHadRefresh = false; tradePartner = nil; tradeGUID = nil; tradeCommitRefresh = 0
         Refresh()                     -- restore the prep cast now the window is gone
-        -- Credit the partner with their stone. Store the GUID (realm-proof) plus a
-        -- realm-stripped name so HasTraded()'s UnitName fallback can't miss on a
-        -- cross-realm skirmish partner.
+        -- Credit the partner with their food/water. Store the GUID (realm-proof)
+        -- plus a realm-stripped name so HasTraded()'s UnitName fallback can't miss
+        -- on a cross-realm skirmish partner.
         local function record()
             if guid then tradedGUIDs[guid] = true end
             if partner then tradedNames[(partner:match("^[^-]+")) or partner] = true end
             Refresh()
         end
         if committed > 0 then
-            -- Both sides accepted with our healthstone(s) in the window: it went
+            -- Both sides accepted with our food/water in the window: it went
             -- through. Deterministic, immune to conjure timing / bag-update lag.
             record()
         else
             -- Fallback for clients that don't report the partner's accept flag:
-            -- infer from our stones leaving the bags. Poll twice for bag lag.
-            C_Timer.After(0.4, function() if HSCount() < before then record() end end)
-            C_Timer.After(1.2, function() if HSCount() < before then record() end end)
+            -- infer from our items leaving the bags. Poll twice for bag lag.
+            C_Timer.After(0.4, function() if RefreshCount() < before then record() end end)
+            C_Timer.After(1.2, function() if RefreshCount() < before then record() end end)
         end
     elseif event == "GROUP_ROSTER_UPDATE" then
         -- roster affects partner buff steps; rebuild to keep them current
         BuildSteps()
         Refresh()
     elseif event == "PLAYER_REGEN_ENABLED" then
-        UpdateSpellstoneButton()
         Refresh()
     else
         Refresh()
@@ -2141,15 +2084,14 @@ SlashCmdList["MAGEPREP"] = function(msg)
         end
     elseif cmd == "status" then
         local key = GetBindingKey("CLICK MagePrepButton:LeftButton") or "|cffff6666none|r"
-        local sskey = GetBindingKey("CLICK MagePrepSpellstoneButton:LeftButton") or "|cffff6666none|r"
         local ackey = GetBindingKey("CLICK MagePrepAcceptButton:LeftButton") or "|cffff6666none|r"
         print("|cff66b3ffMagePrep|r status:")
-        print("  next-step key: |cffffffff" .. key .. "|r   spellstone key: |cffffffff" .. sskey .. "|r   accept key: |cffffffff" .. ackey .. "|r")
+        print("  next-step key: |cffffffff" .. key .. "|r   accept key: |cffffffff" .. ackey .. "|r")
         print("  next-step macro: |cffffffff" .. (button:GetAttribute("macrotext") or "(empty)") .. "|r")
-        print("  wand: |cffffffff" .. (MagePrepDB and MagePrepDB.wand or "(not set)") .. "|r  in arena: " .. tostring(InArena()))
+        print("  armor: |cffffffff" .. ArmorPref() .. "|r  in arena: " .. tostring(InArena()))
         local sz = GetNumGroupMembers() or 0
         local preset = (MagePrepDB and MagePrepDB.preset and PRESETS[MagePrepDB.preset] and PRESETS[MagePrepDB.preset].label) or "Custom"
-        print("  group size: |cffffffff" .. sz .. "|r  preset: |cffffffff" .. preset .. "|r  ->  stones: |cffffffff" .. (UseRitual() and "Ritual of Souls" or "conjure pair") .. "|r")
+        print("  group size: |cffffffff" .. sz .. "|r  preset: |cffffffff" .. preset .. "|r  ->  water: |cffffffff" .. (UseTable() and "Ritual of Refreshment" or "conjure food/water") .. "|r")
     elseif cmd == "debug" then
         if arg == "clear" then
             MagePrepDB = MagePrepDB or {}; MagePrepDB.log = {}
@@ -2161,36 +2103,30 @@ SlashCmdList["MAGEPREP"] = function(msg)
         MagePrepDB.debug = debugOn
         if debugOn then MagePrepDB.log = {} end   -- fresh capture each time it's turned on
         print("|cff66b3ffMagePrep|r: debug tracing |cffffffff" .. (debugOn and "ON" or "OFF") .. "|r"
-              .. (debugOn and " - cast Ritual of Souls, cancel it, then complete it, then |cffffffff/reload|r to save the log to disk." or ""))
+              .. (debugOn and " - cast Ritual of Refreshment, cancel it, then complete it, then |cffffffff/reload|r to save the log to disk." or ""))
     elseif cmd == "bind" and arg ~= "" then
         local key = arg:upper()
         SetBindingClick(key, "MagePrepButton")
         SaveBindings(GetCurrentBindingSet())
         print("|cff66b3ffMagePrep|r: bound |cffffffff" .. key .. "|r to the next-step button")
-    elseif cmd == "bindss" and arg ~= "" then
-        local key = arg:upper()
-        SetBindingClick(key, "MagePrepSpellstoneButton")
-        SaveBindings(GetCurrentBindingSet())
-        print("|cff66b3ffMagePrep|r: bound |cffffffff" .. key .. "|r to the spellstone dispel/swap button")
     elseif cmd == "bindaccept" and arg ~= "" then
         local key = arg:upper()
         SetBindingClick(key, "MagePrepAcceptButton")
         SaveBindings(GetCurrentBindingSet())
-        print("|cff66b3ffMagePrep|r: bound |cffffffff" .. key .. "|r to accept a trade (only when stones are in)")
+        print("|cff66b3ffMagePrep|r: bound |cffffffff" .. key .. "|r to accept a trade (only when food/water is in)")
     elseif cmd == "unbind" and arg ~= "" then
         SetBinding(arg:upper())
         SaveBindings(GetCurrentBindingSet())
         print("|cff66b3ffMagePrep|r: unbound |cffffffff" .. arg:upper() .. "|r")
-    elseif cmd == "wand" then
+    elseif cmd == "armor" then
         MagePrepDB = MagePrepDB or {}
-        if rawArg == "" then
-            MagePrepDB.wand = nil
-            UpdateSpellstoneButton()
-            print("|cff66b3ffMagePrep|r: wand cleared (spellstone button will just dispel, no swap)")
+        if arg == "ice" or arg == "molten" or arg == "mage" then
+            MagePrepDB.armorPreference = arg
+            if UpdateArmorSeg then UpdateArmorSeg() end
+            BuildSteps(); Refresh()
+            print("|cff66b3ffMagePrep|r: armor set to |cffffffff" .. arg .. "|r")
         else
-            MagePrepDB.wand = rawArg
-            UpdateSpellstoneButton()
-            print("|cff66b3ffMagePrep|r: wand set to |cffffffff" .. rawArg .. "|r")
+            print("|cff66b3ffMagePrep|r: usage /mp armor ice|molten|mage (currently |cffffffff" .. ArmorPref() .. "|r)")
         end
     elseif cmd == "mount" then
         MagePrepDB = MagePrepDB or {}
@@ -2224,27 +2160,19 @@ SlashCmdList["MAGEPREP"] = function(msg)
         ToggleOptions()
     elseif cmd == "trade" then
         tradeArmed = true
-        print("|cff66b3ffMagePrep|r: armed - open a trade now and your healthstones drop in (once)")
-    elseif cmd == "spellstone" or cmd == "ss" then
-        print("|cff66b3ffMagePrep|r spellstone dispel/swap:")
-        print("  Prep equips the stone (30s equip CD burns off before the gates).")
-        print("  Then bind the swap button: |cffffffff/mp bindss <KEY>|r (or macro |cffffffff/click MagePrepSpellstoneButton|r)")
-        print("  Set your wand name first: |cffffffff/mp wand <exact wand name>|r")
-        print("  Press = dispel all harmful magic (off-GCD) + swap to wand. Press again later to re-arm the stone.")
+        print("|cff66b3ffMagePrep|r: armed - open a trade now and your conjured food/water drops in (once)")
     else
         print("|cff66b3ffMagePrep|r commands:")
         print("  /mp show | hide | test  - show/hide the checklist (or right-click the minimap icon)")
         print("  /mp minimap  - show/hide the minimap icon")
         print("  /mp options  - choose which steps to include (or left-click the icon)")
-        print("  /mp trade  - arm one trade to auto-fill your healthstones (auto in arena)")
+        print("  /mp armor ice|molten|mage  - pick which armor the armor step casts")
+        print("  /mp trade  - arm one trade to auto-fill your conjured food/water (auto in arena)")
         print("  /mp unlock | lock  - move / pin the window")
         print("  /mp bind <KEY>  - bind the next-step button (e.g. /mp bind 0)")
-        print("  /mp bindss <KEY>  - bind the spellstone dispel/swap button")
-        print("  /mp bindaccept <KEY>  - bind a key to accept a trade (when stones are in)")
-        print("  /mp wand <name>  - set your wand's exact name (for the spellstone swap)")
+        print("  /mp bindaccept <KEY>  - bind a key to accept a trade (when food/water is in)")
         print("  /mp mount <name>  - set the mount used for the gate sprint (or pick it in /mp options)")
         print("  /mp preset 2s|3s5s|bg|custom  - apply a preset (custom keeps your boxes)")
-        print("  /mp spellstone  - how the spellstone dispel/swap button works")
         print("  /mp status  - show your keybinds + what the next press will cast")
     end
 end
