@@ -2,7 +2,7 @@
 ## Title: MagePrep
 ## Notes: Mage arena prep helper - state-aware "next setup step" button + bracket-aware countdown checklist. (Forked from LockPrep.)
 ## Author: boyaloxer
-## Version: 0.2.2
+## Version: 0.2.3
 ## X-License: GPL-2.0
 ## SavedVariables: MagePrepDB
 

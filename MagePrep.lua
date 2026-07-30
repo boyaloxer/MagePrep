@@ -1451,8 +1451,8 @@ local function EndPrepSliderLabel(v)
     return "Ice Barrier unlock: " .. v .. "s left on the countdown"
 end
 local epslider = CreateFrame("Slider", "MagePrepEndPrepSlider", opt, "OptionsSliderTemplate")
-epslider:SetPoint("TOPLEFT", 20, oy - 16)
-epslider:SetWidth(296)
+epslider:SetWidth(280)
+epslider:SetPoint("TOP", opt, "TOP", 0, oy - 16)
 epslider:SetMinMaxValues(END_PREP_MIN, END_PREP_MAX)
 epslider:SetValueStep(1)
 epslider:SetObeyStepOnDrag(true)
@@ -1489,8 +1489,11 @@ do
     lbl:SetTextColor(0.48, 0.60, 0.76)
 end
 local mdd = CreateFrame("Frame", "MagePrepMountDropDown", opt, "UIDropDownMenuTemplate")
-mdd:SetPoint("TOPLEFT", -2, oy - 12)
-UIDropDownMenu_SetWidth(mdd, 280)
+-- UIDropDownMenuTemplate's origin sits left of the visible bar; -16 x offsets so
+-- the bar itself reads centered under the GATE MOUNT label.
+UIDropDownMenu_SetWidth(mdd, 240)
+mdd:ClearAllPoints()
+mdd:SetPoint("TOP", opt, "TOP", -16, oy - 12)
 
 local function SetMount(name)
     MagePrepDB = MagePrepDB or {}
@@ -1671,7 +1674,7 @@ end
 local function MakeKeyRow(labelText, buttonName, yoff)
     local btn = CreateFrame("Button", nil, opt, "UIPanelButtonTemplate")
     btn:SetSize(200, 24)
-    btn:SetPoint("TOPLEFT", 16, yoff)
+    btn:SetPoint("TOP", opt, "TOP", 0, yoff)
     local nt = btn:GetNormalTexture()
     if nt then nt:SetVertexColor(0.40, 0.65, 0.95) end   -- mage-blue tint, keeps the button border/texture
     local row = {
