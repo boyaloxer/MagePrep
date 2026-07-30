@@ -1,0 +1,15 @@
+﻿## Interface: 20506, 20505
+## Title: MagePrep
+## Notes: Mage arena prep helper - state-aware "next setup step" button + bracket-aware countdown checklist. (Forked from LockPrep; mage steps WIP.)
+## Author: boyaloxer
+## Version: 0.1.0
+## X-License: GPL-2.0
+## SavedVariables: MagePrepDB
+
+# Embedded libraries (minimap button)
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+
+MagePrep.lua
