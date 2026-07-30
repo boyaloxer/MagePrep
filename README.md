@@ -27,6 +27,7 @@ Dampen, then Ice Barrier and the gate mount.
 
 ## Status
 
+- **v0.2.4** — gate mount dropdown truly centered (wrapper row matching the slider).
 - **v0.2.3** — centered keybind button, mount dropdown, and Ice Barrier unlock slider in options.
 - **v0.2.2** — Ice Barrier unlock default is 5s left on the countdown (was 12).
 - **v0.2.1** — water/ritual before buffs (LockPrep order); removed drink-to-full (prep casts don’t spend mana).

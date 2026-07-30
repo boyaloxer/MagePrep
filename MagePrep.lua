@@ -1488,12 +1488,18 @@ do
     lbl:SetText("GATE MOUNT")
     lbl:SetTextColor(0.48, 0.60, 0.76)
 end
-local mdd = CreateFrame("Frame", "MagePrepMountDropDown", opt, "UIDropDownMenuTemplate")
--- UIDropDownMenuTemplate's origin sits left of the visible bar; -16 x offsets so
--- the bar itself reads centered under the GATE MOUNT label.
-UIDropDownMenu_SetWidth(mdd, 240)
+-- Center the dropdown the same way as the unlock slider: a fixed-width row on
+-- the panel midline, then the menu template centered inside it. (Anchoring the
+-- template itself with a guessed x-offset is unreliable — SetWidth makes the
+-- frame wider than the "width" argument by Blizzard's left/right padding.)
+local mountWrap = CreateFrame("Frame", nil, opt)
+mountWrap:SetSize(280, 32)
+mountWrap:SetPoint("TOP", opt, "TOP", 0, oy - 12)
+local mdd = CreateFrame("Frame", "MagePrepMountDropDown", mountWrap, "UIDropDownMenuTemplate")
+-- 230 + 25 + 25 padding from UIDropDownMenu_SetWidth ≈ 280, matching the wrap.
+UIDropDownMenu_SetWidth(mdd, 230)
 mdd:ClearAllPoints()
-mdd:SetPoint("TOP", opt, "TOP", -16, oy - 12)
+mdd:SetPoint("CENTER", mountWrap, "CENTER", 0, 0)
 
 local function SetMount(name)
     MagePrepDB = MagePrepDB or {}
