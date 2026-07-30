@@ -240,10 +240,10 @@ end
 -- them until <= EndPrepSecs() left so mashing early doesn't waste a fresh
 -- barrier / mount you before the gates. Tunable
 -- via the options slider, stored PER PRESET (2s / 3s5s / bg / custom each keep
--- their own value). Default 12; 0 disables the gate entirely. If no countdown
+-- their own value). Default 5; 0 disables the gate entirely. If no countdown
 -- has been detected yet (gateAt nil) we allow it - never lock the user out over
 -- a missing timer; order still applies via each step's own checks.
-local END_PREP_DEFAULT = 12
+local END_PREP_DEFAULT = 5
 local END_PREP_MIN, END_PREP_MAX = 0, 30
 local function ClampEndPrep(v)
     if type(v) ~= "number" then return END_PREP_DEFAULT end
@@ -1445,7 +1445,7 @@ MakeCheck("Debug logging", "traces to chat",
 oy = oy - 10
 
 -- Finish unlock slider: per-preset (each of 2s / 3s5s / BGs / Custom stores its
--- own value). Gates the timed finish (Ice Barrier + mount). Default 12s; 0 = no gate.
+-- own value). Gates the timed finish (Ice Barrier + mount). Default 5s; 0 = no gate.
 local function EndPrepSliderLabel(v)
     if v <= 0 then return "Ice Barrier unlock: anytime (no gate)" end
     return "Ice Barrier unlock: " .. v .. "s left on the countdown"

@@ -27,6 +27,7 @@ Dampen, then Ice Barrier and the gate mount.
 
 ## Status
 
+- **v0.2.2** — Ice Barrier unlock default is 5s left on the countdown (was 12).
 - **v0.2.1** — water/ritual before buffs (LockPrep order); removed drink-to-full (prep casts don’t spend mana).
 - **v0.2.0** — mage prep routine live: Mana Emerald, Conjure Food/Water (trade) or Ritual of Refreshment, Arcane Intellect, armor, Amplify/Dampen, Ice Barrier, mount. LockPrep safety engine kept; warlock-only systems removed.
 - **v0.1.2** — options background swapped to `blizzmage` (mage art).
