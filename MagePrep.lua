@@ -44,7 +44,6 @@ local CFG = {
         ritual       = "/cast Ritual of Refreshment",       -- 43987: refreshment table for the team
         barrier      = "/cast Ice Barrier",
         mount        = "/use Red Skeletal Warhorse",        -- ground mount for the gate sprint
-        drink        = "/use Conjured Mountain Spring Water",-- fallback; DrinkMacro() prefers what you carry
     },
 
     -- item / buff names used for state detection (enUS)
@@ -99,8 +98,7 @@ end
 local function Have(itemName) return (GetItemCount(itemName) or 0) > 0 end
 
 -- Conjured-item counts (sum every known rank/name so a single-rank pin can't
--- miss). RefreshCount = the food+water total, used for the trade bag-delta check
--- and the drink step's readiness.
+-- miss). RefreshCount = the food+water total, used for the trade bag-delta check.
 local function FoodCount()
     local n = 0
     for _, nm in ipairs(FOOD_ITEMS) do n = n + (GetItemCount(nm) or 0) end
@@ -183,18 +181,6 @@ end
 -- The action line for the mount step: mages ride bag-item mounts, so always /use.
 local function MountMacro()
     return "/use " .. MountName()
-end
-
--- The drink step uses whatever conjured water you're actually carrying (falls
--- back to a Mana Biscuit from the refreshment table, then CFG.cast.drink).
-local function DrinkMacro()
-    for _, nm in ipairs(WATER_ITEMS) do
-        if (GetItemCount(nm) or 0) > 0 then return "/use " .. nm end
-    end
-    if (GetItemCount("Conjured Mana Biscuit") or 0) > 0 then
-        return "/use Conjured Mana Biscuit"
-    end
-    return CFG.cast.drink
 end
 
 -- Whether we're in "table" mode: driven purely by the checkboxes (set via a
@@ -359,15 +345,14 @@ end
 -- Step groups (each can be toggled off in the options panel)
 -- =====================================================================
 local GROUPS = {
-    { key = "intellect", label = "Arcane Intellect" },
-    { key = "armor",     label = "Armor (Ice/Molten/Mage)" },
-    { key = "amplify",   label = "Amplify Magic (healer comps)" },
-    { key = "dampen",    label = "Dampen Magic (double DPS)" },
     { key = "emerald",   label = "Mana Emerald" },
     { key = "food",      label = "Conjure Food (2s)" },
     { key = "water",     label = "Conjure Water (2s)" },
     { key = "ritual",    label = "Ritual of Refreshment (3s/5s)" },
-    { key = "drink",     label = "Drink to full" },
+    { key = "intellect", label = "Arcane Intellect" },
+    { key = "armor",     label = "Armor (Ice/Molten/Mage)" },
+    { key = "amplify",   label = "Amplify Magic (healer comps)" },
+    { key = "dampen",    label = "Dampen Magic (double DPS)" },
     { key = "barrier",   label = "Ice Barrier" },
     { key = "mount",     label = "Mount" },
 }
@@ -390,7 +375,36 @@ local function BuildSteps()
         steps[#steps + 1] = t
     end
 
-    -- 1) Arcane Intellect: self first, then each partner. Arcane Brilliance on
+    -- Water first (same idea as LockPrep: Ritual of Souls / stones before buffs)
+    -- so the table or conjures are down while teammates still have time to click /
+    -- trade, then you buff.
+
+    -- 1) Mana Emerald (gem you crack for mana). Done once one is in the bags (or
+    --    a conjure just landed -- itemPending).
+    add({ id = "emerald", group = "emerald", label = "Conjure Mana Emerald", macro = CFG.cast.emerald,
+          castName = CREATE_EMERALD,
+          done = function() return ItemStepDone("emerald", EmeraldCount) end })
+
+    -- 2/3) Conjured food & water (2s: make a stack, trade some to partners).
+    --      Which of these show is driven by the checkboxes (via presets):
+    --       * 2s preset:  food + water on, ritual off  -> conjure & trade
+    --       * 3s/5s:      ritual on, food/water off     -> one table, team grabs
+    --      (2s loop: trade some away and the step re-offers, so make -> trade -> make.)
+    add({ id = "food", group = "food", label = "Conjure Food", macro = CFG.cast.food,
+          castName = CREATE_FOOD,
+          done = function() return ItemStepDone("food", FoodCount) end })
+    add({ id = "water", group = "water", label = "Conjure Water", macro = CFG.cast.water,
+          castName = CREATE_WATER,
+          done = function() return ItemStepDone("water", WaterCount) end })
+
+    -- 4) Ritual of Refreshment is done ONLY when the table actually spawns
+    --    (ritualDone, decided on channel-stop via the spell's cooldown). It
+    --    deliberately does NOT count "you have food" as done -- it exists to drop
+    --    a table for the TEAM, not to feed just you.
+    add({ id = "ritual", group = "ritual", label = "Ritual of Refreshment (table for the team)", macro = CFG.cast.ritual,
+          done = function() return ritualDone end })
+
+    -- 5) Arcane Intellect: self first, then each partner. Arcane Brilliance on
     --    anyone counts as done (see HasIntellect).
     add({ id = "ai_self", group = "intellect", label = "Arcane Intellect (you)", macro = CFG.cast.intellect:format("player"),
           done = function() return HasIntellect("player") end })
@@ -400,12 +414,12 @@ local function BuildSteps()
               ready = function() return UnitExists(u) end })
     end
 
-    -- 2) Armor: whichever the user prefers (Ice / Molten / Mage). Any one of
+    -- 6) Armor: whichever the user prefers (Ice / Molten / Mage). Any one of
     --    them satisfies the step.
     add({ id = "armor", group = "armor", label = "Armor (Ice/Molten/Mage)", macro = PreferredArmorMacro(),
           done = function() return HasAnyArmor() end })
 
-    -- 3) Amplify Magic (healer comps) OR Dampen Magic (double DPS) -- which one
+    -- 7) Amplify Magic (healer comps) OR Dampen Magic (double DPS) -- which one
     --    shows is driven by the checkboxes/preset. Self + each partner.
     add({ id = "amp_self", group = "amplify", label = "Amplify Magic (you)", macro = CFG.cast.amplify:format("player"),
           done = function() return HasBuff("player", CFG.buff.amplify) end })
@@ -422,45 +436,11 @@ local function BuildSteps()
               ready = function() return UnitExists(u) end })
     end
 
-    -- 4) Mana Emerald (gem you crack for mana). Done once one is in the bags (or
-    --    a conjure just landed -- itemPending).
-    add({ id = "emerald", group = "emerald", label = "Conjure Mana Emerald", macro = CFG.cast.emerald,
-          castName = CREATE_EMERALD,
-          done = function() return ItemStepDone("emerald", EmeraldCount) end })
-
-    -- 5/6) Conjured food & water (2s: make a stack, trade some to partners).
-    --      Which of these show is driven by the checkboxes (via presets):
-    --       * 2s preset:  food + water on, ritual off  -> conjure & trade
-    --       * 3s/5s/BGs:  ritual on, food/water off     -> one table, team grabs
-    --      (2s loop: trade some away and the step re-offers, so make -> trade -> make.)
-    add({ id = "food", group = "food", label = "Conjure Food", macro = CFG.cast.food,
-          castName = CREATE_FOOD,
-          done = function() return ItemStepDone("food", FoodCount) end })
-    add({ id = "water", group = "water", label = "Conjure Water", macro = CFG.cast.water,
-          castName = CREATE_WATER,
-          done = function() return ItemStepDone("water", WaterCount) end })
-
-    -- 7) Ritual of Refreshment is done ONLY when the table actually spawns
-    --    (ritualDone, decided on channel-stop via the spell's cooldown). It
-    --    deliberately does NOT count "you have food" as done -- it exists to drop
-    --    a table for the TEAM, not to feed just you.
-    add({ id = "ritual", group = "ritual", label = "Ritual of Refreshment (table for the team)", macro = CFG.cast.ritual,
-          done = function() return ritualDone end })
-
-    -- 8) Drink to full: use conjured water until mana is topped off. Ready once
-    --    you actually have water to drink.
-    add({ id = "drink", group = "drink", label = "Drink to full", macro = DrinkMacro(),
-          done = function()
-              local mx = UnitPowerMax("player", 0) or 0
-              if mx <= 0 then return true end
-              return (UnitPower("player", 0) or 0) / mx >= 0.95
-          end,
-          ready = function() return Have(CFG.item.water) or RefreshCount() > 0 end })
-
     -- Timed finish -----------------------------------------------------
     -- Ice Barrier + mount hold until the gate is close (EndPrepReady): a fresh
     -- barrier shouldn't be spent early, and you don't want to mount before the
     -- last moment. Order-gated only otherwise.
+    -- (No "drink to full": arena prep casts don't spend mana before gates.)
     add({ id = "barrier", group = "barrier", label = "Ice Barrier", macro = CFG.cast.barrier,
           done = function() return HasBuff("player", CFG.buff.barrier) end,
           ready = EndPrepReady })
@@ -505,14 +485,11 @@ local function Refresh()
     if itemPending.food and FoodCount() > 0 then itemPending.food = nil end
     if itemPending.water and WaterCount() > 0 then itemPending.water = nil end
     local step = FirstIncomplete()
-    -- Drink macro is bag-dependent; rebuild live so a just-conjured / table
-    -- biscuit is what the button actually uses (BuildSteps may have baked an
-    -- empty-bag fallback earlier).
+    -- Armor / mount macros depend on DB preference / bag mount scan; rebuild
+    -- live so a changed preference or late-found mount is what the button uses.
     local macro = ""
     if step then
-        if step.id == "drink" then
-            macro = DrinkMacro()
-        elseif step.id == "armor" then
+        if step.id == "armor" then
             macro = PreferredArmorMacro()
         elseif step.id == "mount" then
             macro = MountMacro()
@@ -1110,9 +1087,9 @@ local PRESETS = {
     ["2s"]   = { label = "2s",      disabled = { ritual = true, dampen = true } },
     -- 3s/5s: refreshment table for the team; no manual food/water; Amplify on.
     ["3s5s"] = { label = "3s / 5s", disabled = { food = true, water = true, dampen = true } },
-    -- BGs: skip the party amp/dampen spam + table + drink/mount fuss; keep
+    -- BGs: skip the party amp/dampen spam + table + mount fuss; keep
     -- intellect / armor / emerald / barrier.
-    ["bg"]   = { label = "BGs",     disabled = { amplify = true, dampen = true, food = true, water = true, ritual = true, drink = true, mount = true } },
+    ["bg"]   = { label = "BGs",     disabled = { amplify = true, dampen = true, food = true, water = true, ritual = true, mount = true } },
     -- "custom" restores the user's last hand-tuned checkbox set (saved in
     -- MagePrepDB.customDisabled). Hand-editing any box also flips to this.
     ["custom"] = { label = "Custom", custom = true },
@@ -1348,8 +1325,8 @@ oy = oy - 32
 -- step-group checkboxes, grouped into sections (labels come from GROUPS; a
 -- trailing "(...)" qualifier becomes the right-aligned note)
 local GROUP_SECTIONS = {
+    { title = "WATER",  keys = { "emerald", "food", "water", "ritual" } },
     { title = "BUFFS",  keys = { "intellect", "armor", "amplify", "dampen" } },
-    { title = "WATER",  keys = { "emerald", "food", "water", "ritual", "drink" } },
     { title = "FINISH", keys = { "barrier", "mount" } },
 }
 local GROUP_LABEL, GROUP_NOTE = {}, {}
